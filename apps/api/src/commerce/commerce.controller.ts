@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   contractCreateSchema,
   contractPatchSchema,
@@ -18,13 +19,17 @@ import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
 import { CommerceService, listQuery } from './commerce.service';
+import { SettlementImportService } from './settlement-import.service';
 
 const decision = z.object({ pass: z.boolean(), reason: z.string().optional() });
 
 @Controller()
 @UseGuards(JwtAuthGuard)
 export class CommerceController {
-  constructor(private readonly commerce: CommerceService) {}
+  constructor(
+    private readonly commerce: CommerceService,
+    private readonly amounts: SettlementImportService,
+  ) {}
 
   @Get('contracts')
   contracts(@CurrentUser() user: AuthUser, @Query(new ZodPipe(listQuery)) query: z.infer<typeof listQuery>) {
@@ -69,6 +74,26 @@ export class CommerceController {
   @Post('settlements/generate-batch')
   generateBatch(@CurrentUser() user: AuthUser, @Body(new ZodPipe(settlementBatchSchema)) body: z.infer<typeof settlementBatchSchema>) {
     return this.commerce.generateBatch(user, body);
+  }
+
+  @Get('settlements/amount-template')
+  async amountTemplate(@CurrentUser() user: AuthUser) {
+    const body = await this.amounts.template(user);
+    return new StreamableFile(body, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="settlement-amounts.xlsx"',
+    });
+  }
+
+  @Post('settlements/amount-import')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
+  amountImport(@CurrentUser() user: AuthUser, @UploadedFile() file: Express.Multer.File) {
+    return this.amounts.preview(user, file);
+  }
+
+  @Post('settlements/amount-import/:id/confirm')
+  amountConfirm(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.amounts.confirm(user, id);
   }
 
   @Get('settlements/:id')

@@ -22,6 +22,7 @@ describe('定时任务时刻', () => {
   it('默认 05:00 预警、06:00 超时、01:00 出单，可用环境变量覆盖', () => {
     expect(jobScheduleFromEnv({})).toMatchObject({
       tz: 'Asia/Shanghai',
+      ds01: '0 0 * * *',
       ds09Warn: '0 5 * * *',
       ds09Repeat: '*/30 * * * *',
       ds09Escalate: '0 6 * * *',

@@ -273,6 +273,19 @@ export const submitManagerSchema = z.object({
 export const importMappingSchema = z.object({
   mapping: z.record(z.string()),
   platformId: z.string().min(1).optional(),
+  saveAsTemplate: z.boolean().optional(),
+});
+
+export const importConfirmSchema = z.object({
+  dramaId: z.string().min(1),
+});
+
+export const importIgnoreSchema = z.object({
+  reason: z.string().trim().min(1, '标记忽略必须填写原因').max(500),
+});
+
+export const importPatchRowSchema = z.object({
+  values: z.record(z.string()).refine((value) => Object.keys(value).length > 0, '请填写要修改的单元格'),
 });
 
 export const importMarkSchema = z.object({

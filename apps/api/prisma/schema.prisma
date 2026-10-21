@@ -212,6 +212,8 @@ model User {
   tasks          AsyncTask[]
   notifications  Notification[]
   importBatches  DailyImportBatch[]
+  importTemplates ImportFieldTemplate[]
+  dramaAliases   DramaAlias[] @relation("AliasAuthor")
 
   @@index([role])
   @@index([companyId])
@@ -291,6 +293,9 @@ model Platform {
   dailyStats    DailyStat[]
   watermarks    WatermarkShot[]
   importBatches DailyImportBatch[]
+  syncTasks     SyncTask[]
+  importTemplates ImportFieldTemplate[]
+  dramaAliases  DramaAlias[]
 
   @@index([firstBatch, enabled, sort])
 }
@@ -321,6 +326,7 @@ model Drama {
   contractDramas ContractDrama[]
   watermarks WatermarkShot[]
   tickets    Ticket[]
+  aliases    DramaAlias[]
 
   @@index([companyId, updatedAt(sort: Desc)])
   @@index([companyId, createdAt])
@@ -852,6 +858,8 @@ model DailyImportBatch {
   headers              Json?
   forceReason          String?
   managerNote          String?
+  headerChanged        Boolean           @default(false)
+  templateVersion      Int?
   createdById          String
   createdBy            User              @relation(fields: [createdById], references: [id])
   submittedToManagerAt DateTime?
@@ -873,9 +881,95 @@ model DailyImportRow {
   mapped      Json?
   status      ImportRowStatus  @default(OK)
   errorReason String           @default("")
+  issues      Json?
+  candidates  Json?
+  rowAction   String           @default("")
   dailyStatId String?
   createdAt   DateTime         @default(now())
 
   @@unique([batchId, rowNo])
   @@index([batchId, status])
+}
+
+enum SyncTaskStatus {
+  PENDING
+  SYNCING
+  PUBLISHED
+  OVERDUE
+}
+
+model SyncTask {
+  id          String         @id @default(cuid())
+  platformId  String
+  platform    Platform       @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  statDate    DateTime       @db.Date
+  status      SyncTaskStatus @default(PENDING)
+  publishedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([platformId, statDate])
+  @@index([status, statDate])
+}
+
+model ImportFieldTemplate {
+  id          String   @id @default(cuid())
+  platformId  String
+  platform    Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  version     Int
+  mapping     Json
+  headers     Json
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@unique([platformId, version])
+}
+
+model DramaAlias {
+  id               String   @id @default(cuid())
+  platformId       String
+  platform         Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  dramaId          String
+  drama            Drama    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  aliasNorm        String
+  aliasRaw         String   @default("")
+  platformSeriesId String   @default("")
+  createdById      String
+  createdBy        User     @relation("AliasAuthor", fields: [createdById], references: [id])
+  createdAt        DateTime @default(now())
+
+  @@unique([platformId, aliasNorm])
+  @@index([platformId, platformSeriesId])
+}
+
+model SettlementImportBatch {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  fileName    String
+  status      String   @default("PREVIEWED")
+  createdById String
+  createdAt   DateTime @default(now())
+  rows        SettlementImportRow[]
+
+  @@index([createdById, createdAt])
+}
+
+model SettlementImportRow {
+  id             String  @id @default(cuid())
+  batchId        String
+  batch          SettlementImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  settlementId   String?
+  settlementCode String
+  kind           String
+  amountCny      String  @default("")
+  previousAmount String  @default("")
+  internalNote   String  @default("")
+  clientNote     String  @default("")
+  reason         String  @default("")
+  errorReason    String  @default("")
+  lines          Json?
+  applied        Boolean @default(false)
+
+  @@index([batchId, kind])
 }

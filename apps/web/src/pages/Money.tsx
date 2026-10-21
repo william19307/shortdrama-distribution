@@ -5,7 +5,7 @@ import * as echarts from 'echarts';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { api, qs, uploadFile, type Page } from '../api';
+import { api, download, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { useDsTheme } from '../theme';
 import { ErrorNote, MoneyText, PageHead, PlatformChip, StatusTag, dayText } from '../ui';
@@ -51,6 +51,7 @@ export function SettlementsPage() {
   const [withdrawals, setWithdrawals] = useState<Page<Withdrawal> | null>(null);
   const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
   const [applyOpen, setApplyOpen] = useState(false);
+  const [amountBatch, setAmountBatch] = useState<any>(null);
 
   const load = () => {
     api<SettlementPage>(`/settlements${qs({ page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
@@ -132,6 +133,35 @@ export function SettlementsPage() {
           }}>按这个周期批量生成</Button>
         </Form>
       ) : null}
+      {!client ? <Space wrap style={{ marginBottom: 12 }}>
+        <Button disabled={viewOnly} onClick={() => download('/settlements/amount-template', 'settlement-amounts.xlsx').catch((err) => message.error(err instanceof Error ? err.message : '没有下载'))}>下载应结模板</Button>
+        <Upload accept=".xlsx" maxCount={1} showUploadList={false} disabled={viewOnly} beforeUpload={async (file) => {
+          try {
+            const body = new FormData();
+            body.append('file', file);
+            const headers = new Headers();
+            const token = getToken();
+            if (token) headers.set('Authorization', `Bearer ${token}`);
+            const res = await fetch('/api/settlements/amount-import', { method: 'POST', headers, body });
+            const data = await res.json();
+            if (!res.ok) throw new Error(typeof data?.message === 'string' ? data.message : '没有导入');
+            setAmountBatch(data);
+            message.success(`新增 ${data.summary.created}，修改 ${data.summary.modified}，未变 ${data.summary.unchanged}，错误 ${data.summary.error}`);
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有导入'); }
+          return false;
+        }}><Button disabled={viewOnly}>导入应结 Excel</Button></Upload>
+        {amountBatch ? <Button type="primary" disabled={viewOnly} onClick={async () => {
+          try { setAmountBatch(await api(`/settlements/amount-import/${amountBatch.id}/confirm`, { method: 'POST' })); message.success('已按预览写入'); load(); }
+          catch (err) { message.error(err instanceof Error ? err.message : '没有确认'); }
+        }}>确认导入</Button> : null}
+      </Space> : null}
+      {amountBatch ? <Table size="small" style={{ marginBottom: 12 }} rowKey="id" pagination={false} dataSource={amountBatch.rows || []} columns={[
+        { title: '结算单', dataIndex: 'settlementCode' },
+        { title: '类别', dataIndex: 'kind', render: (value: string) => ({ NEW: '新增', MODIFY: '修改', UNCHANGED: '未变', ERROR: '错误' }[value] || value) },
+        { title: '原金额', dataIndex: 'previousAmount' },
+        { title: '新金额', dataIndex: 'amountCny' },
+        { title: '问题', dataIndex: 'errorReason' },
+      ]} /> : null}
       <Table
         rowKey="id"
         dataSource={rows?.items || []}

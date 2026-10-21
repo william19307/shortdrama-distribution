@@ -346,12 +346,14 @@ export function DailyPage() {
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
   const [batch, setBatch] = useState<any>(null);
+  const [tasks, setTasks] = useState<any[]>([]);
   const load = () => api<Page<any>>(`/daily-stats${qs({ page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [page]);
   useEffect(() => {
     api<any[]>('/platforms').then(setPlatforms).catch(() => undefined);
     api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)).catch(() => undefined);
     api<any[]>('/sync-expectations').then(setExpect).catch(() => undefined);
+    api<any[]>('/daily-sync').then(setTasks).catch(() => undefined);
   }, []);
 
   return (
@@ -405,6 +407,12 @@ export function DailyPage() {
         ]} /> : null}
       </Card>
       <Space wrap style={{ marginBottom: 12 }}>{expect.map((item) => <Tag key={item.id}>{item.name} · {item.asOfLabel}</Tag>)}</Space>
+      {tasks.length ? <Table size="small" style={{ marginBottom: 12 }} rowKey="id" pagination={false} dataSource={tasks.slice(0, 12)} columns={[
+        { title: '平台', dataIndex: ['platform', 'name'] },
+        { title: '数据日期', dataIndex: 'statDate' },
+        { title: '口径', dataIndex: 'asOfLabel' },
+        { title: '任务', dataIndex: 'status' },
+      ]} /> : null}
       <Form layout="vertical" style={{ maxWidth: 880 }} onFinish={async (values) => {
         try {
           const saved = await api<any>('/daily-stats', { method: 'POST', json: { ...values, uniqueViewers: values.uniqueViewers ?? undefined, paidUnlocks: values.paidUnlocks ?? undefined } });

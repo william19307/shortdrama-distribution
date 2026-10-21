@@ -3,14 +3,16 @@ import { Prisma } from '@prisma/client';
 import cron, { ScheduledTask } from 'node-cron';
 import { AuditService } from '../core/audit.service';
 import { assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { expectedStatDate, shanghaiToday } from '@shortform/shared';
 import { PrismaService } from '../core/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
-export const JOB_NAMES = ['daily-stats-warn', 'daily-stats-escalate', 'review-sla', 'settlement-generate'] as const;
+export const JOB_NAMES = ['sync-tasks', 'daily-stats-warn', 'daily-stats-escalate', 'review-sla', 'settlement-generate'] as const;
 export type JobName = (typeof JOB_NAMES)[number];
 
 export type JobSchedule = {
   tz: string;
+  ds01: string | null;
   ds09Warn: string | null;
   ds09Repeat: string | null;
   ds09Escalate: string | null;
@@ -39,6 +41,7 @@ function ratio(env: NodeJS.ProcessEnv, key: string, fallback: number) {
 export function jobScheduleFromEnv(env: NodeJS.ProcessEnv = process.env): JobSchedule {
   return {
     tz: env.CRON_TZ?.trim() || 'Asia/Shanghai',
+    ds01: cronExpr(env, 'CRON_DS01', '0 0 * * *'),
     ds09Warn: cronExpr(env, 'CRON_DS09_WARN', '0 5 * * *'),
     ds09Repeat: cronExpr(env, 'CRON_DS09_REPEAT', '*/30 * * * *'),
     ds09Escalate: cronExpr(env, 'CRON_DS09_ESCALATE', '0 6 * * *'),
@@ -63,6 +66,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test' || process.env.JOBS_ENABLED === 'false') return;
+    this.startCron(this.schedule.ds01, 'DS-01 生成同步任务', () => this.syncTasks());
     this.startCron(this.schedule.ds09Warn, 'DS-09 05:00 预警', () => this.dailyStatsWarn());
     this.startCron(this.schedule.ds09Repeat, 'DS-09 未完成重复提醒', () => this.dailyStatsWarn());
     this.startCron(this.schedule.ds09Escalate, 'DS-09 超时升级', () => this.dailyStatsEscalate());
@@ -94,6 +98,8 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(`未知任务：${name}，可选 ${JOB_NAMES.join('、')}`);
     }
     switch (name as JobName) {
+      case 'sync-tasks':
+        return this.syncTasks();
       case 'daily-stats-warn':
         return this.dailyStatsWarn();
       case 'daily-stats-escalate':
@@ -105,6 +111,24 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       default:
         throw new BadRequestException(`未知任务：${name}`);
     }
+  }
+
+  async syncTasks() {
+    const platforms = await this.prisma.platform.findMany({ where: { enabled: true }, select: { id: true, code: true, syncLag: true } });
+    const created: string[] = [];
+    for (const platform of platforms) {
+      const statDate = expectedStatDate(platform.syncLag);
+      const existing = await this.prisma.syncTask.findUnique({
+        where: { platformId_statDate: { platformId: platform.id, statDate: day(statDate) } },
+      });
+      if (existing) continue;
+      await this.prisma.syncTask.create({ data: { platformId: platform.id, statDate: day(statDate), status: 'PENDING' } });
+      created.push(`${platform.code}:${statDate}`);
+    }
+    const message = `[DS-01] 生成同步任务 ${created.length} 条`;
+    this.log.log(message);
+    await this.audit.write(null, 'job.sync-tasks', 'SyncTask', shanghaiToday(), { message, created });
+    return { job: 'sync-tasks', created, message };
   }
 
   async dailyStatsWarn() {
@@ -157,6 +181,11 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
         entityId: yesterday,
       });
     }
+    const today = shanghaiToday();
+    await this.prisma.syncTask.updateMany({
+      where: { status: { in: ['PENDING', 'SYNCING'] }, statDate: { lt: day(today) } },
+      data: { status: 'OVERDUE' },
+    });
     this.log.error(message);
     await this.audit.write(null, 'job.daily-stats-escalate', 'Job', yesterday, { message, pending, managers: managers.map((row) => row.id) });
     return { job: 'daily-stats-escalate', date: yesterday, pending, managers, message };

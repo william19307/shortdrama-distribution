@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { dailyListSchema, dailyStatSchema, forcePublishSchema, importMappingSchema, importMarkSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
+import { dailyListSchema, dailyStatSchema, forcePublishSchema, importConfirmSchema, importIgnoreSchema, importMappingSchema, importMarkSchema, importPatchRowSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -37,6 +37,11 @@ export class MetricsController {
     return this.metrics.saveDaily(user, body);
   }
 
+  @Get('daily-sync')
+  syncTasks(@CurrentUser() user: AuthUser) {
+    return this.imports.listSync(user);
+  }
+
   @Post('daily-stats/import')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
   importUpload(@CurrentUser() user: AuthUser, @UploadedFile() file: Express.Multer.File, @Query('platformId') platformId?: string) {
@@ -66,6 +71,36 @@ export class MetricsController {
     @Body(new ZodPipe(importMarkSchema)) body: z.infer<typeof importMarkSchema>,
   ) {
     return this.imports.markRow(user, id, rowNo, body.reason);
+  }
+
+  @Post('daily-stats/import/:id/rows/:rowNo/confirm')
+  importConfirm(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('rowNo', ParseIntPipe) rowNo: number,
+    @Body(new ZodPipe(importConfirmSchema)) body: z.infer<typeof importConfirmSchema>,
+  ) {
+    return this.imports.confirmRow(user, id, rowNo, body.dramaId);
+  }
+
+  @Post('daily-stats/import/:id/rows/:rowNo/ignore')
+  importIgnore(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('rowNo', ParseIntPipe) rowNo: number,
+    @Body(new ZodPipe(importIgnoreSchema)) body: z.infer<typeof importIgnoreSchema>,
+  ) {
+    return this.imports.ignoreRow(user, id, rowNo, body.reason);
+  }
+
+  @Patch('daily-stats/import/:id/rows/:rowNo')
+  importPatch(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('rowNo', ParseIntPipe) rowNo: number,
+    @Body(new ZodPipe(importPatchRowSchema)) body: z.infer<typeof importPatchRowSchema>,
+  ) {
+    return this.imports.patchRow(user, id, rowNo, body.values);
   }
 
   @Post('daily-stats/import/:id/publish')
