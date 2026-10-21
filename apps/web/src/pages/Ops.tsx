@@ -593,13 +593,31 @@ export function WatermarksPage() {
   const [form, setForm] = useState({ dramaId: '', platformId: '', shotDate: '', kind: 'DATA', filename: '' });
   const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const [zipResult, setZipResult] = useState<{ succeeded: number; archived: number; failed: number; items: { filename: string; ok: boolean; status?: string; ticketCode?: string; error?: string }[] } | null>(null);
   const load = () => api<any[]>('/watermarks').then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); api<any[]>('/platforms').then(setPlatforms); api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)); }, []);
 
   return (
     <div>
-      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人、上海时间和工单号。成功匹配的截图并进当天的工单。勾选后可以打包下载。" extra={<Button disabled={!picked.length || user?.role === 'ADMIN'} onClick={async () => { try { await downloadPost('/evidence/archive-zip', { fileKeys: picked }, 'evidence.zip'); } catch (err) { message.error(err instanceof Error ? err.message : '没有下载'); } }}>批量下载</Button>} />
+      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人、上海时间和工单号。成功匹配的截图并进当天的工单。可以上传 zip 批量归档，也可以勾选后打包下载。" extra={<Space>
+        <Upload accept=".zip,application/zip" showUploadList={false} beforeUpload={async (file) => {
+          try {
+            const body = new FormData();
+            body.append('file', file);
+            const result = await api<{ succeeded: number; archived: number; failed: number; items: { filename: string; ok: boolean; status?: string; ticketCode?: string; error?: string }[] }>('/evidence/upload-zip', { method: 'POST', body });
+            setZipResult(result);
+            message.success(`成功 ${result.succeeded} 张，已归档 ${result.archived} 张，失败 ${result.failed} 张`);
+            load();
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有归档'); }
+          return false;
+        }}><Button disabled={user?.role === 'ADMIN'}>上传 zip 批量归档</Button></Upload>
+        <Button disabled={!picked.length || user?.role === 'ADMIN'} onClick={async () => { try { await downloadPost('/evidence/archive-zip', { fileKeys: picked }, 'evidence.zip'); } catch (err) { message.error(err instanceof Error ? err.message : '没有下载'); } }}>批量下载</Button>
+      </Space>} />
       <ErrorNote error={error} />
+      {zipResult ? <div style={{ marginBottom: 12 }}>
+        <div>成功 {zipResult.succeeded} 张，已归档 {zipResult.archived} 张，失败 {zipResult.failed} 张</div>
+        {zipResult.items.map((item, index) => <div key={`${item.filename}-${index}`} style={{ color: 'var(--ds-text-3)' }}>{item.filename}：{item.ok ? (item.status === 'ARCHIVED' ? `已归档 ${item.ticketCode || ''}` : '待归档') : item.error}</div>)}
+      </div> : null}
       <Space wrap style={{ marginBottom: 12 }}>
         <Select style={{ width: 220 }} placeholder="剧" value={form.dramaId || undefined} onChange={(dramaId) => setForm({ ...form, dramaId })} options={dramas.map((item) => ({ value: item.id, label: item.title }))} />
         <Select style={{ width: 160 }} placeholder="平台" value={form.platformId || undefined} onChange={(platformId) => setForm({ ...form, platformId })} options={platforms.map((item) => ({ value: item.id, label: item.name }))} />

@@ -1,3 +1,9 @@
+import { inflateRawSync } from 'zlib';
+
+const MAX_ENTRY = 15 * 1024 * 1024;
+
+export type ZipEntry = { name: string; data?: Buffer; error?: string };
+
 function crc32(buf: Buffer) {
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i += 1) {
@@ -64,6 +70,117 @@ export function zipStore(files: { name: string; data: Buffer }[]): Buffer {
   end.writeUInt32LE(offset, 16);
   end.writeUInt16LE(0, 20);
   return Buffer.concat([...locals, centralBuf, end]);
+}
+
+/** 读取中央目录。只接受存储和 deflate，单文件解压不超过 15MB。结构损坏时抛出错误。 */
+export function unzip(buf: Buffer): ZipEntry[] {
+  if (buf.length < 22) throw new Error('不是有效的 zip');
+  const eocd = findEocd(buf);
+  if (eocd < 0) throw new Error('不是有效的 zip');
+  const total = buf.readUInt16LE(eocd + 10);
+  const centralSize = buf.readUInt32LE(eocd + 12);
+  const centralOff = buf.readUInt32LE(eocd + 16);
+  if (centralOff === 0xffffffff || centralSize === 0xffffffff) throw new Error('不支持超大压缩包');
+  if (centralOff + centralSize > buf.length) throw new Error('不是有效的 zip');
+  const entries: ZipEntry[] = [];
+  let pos = centralOff;
+  const end = centralOff + centralSize;
+  let images = 0;
+  for (let i = 0; i < total; i += 1) {
+    if (pos + 46 > end || buf.readUInt32LE(pos) !== 0x02014b50) throw new Error('不是有效的 zip');
+    const flags = buf.readUInt16LE(pos + 8);
+    const method = buf.readUInt16LE(pos + 10);
+    const crc = buf.readUInt32LE(pos + 16);
+    const compSize = buf.readUInt32LE(pos + 20);
+    const uncompSize = buf.readUInt32LE(pos + 24);
+    const nameLen = buf.readUInt16LE(pos + 28);
+    const extraLen = buf.readUInt16LE(pos + 30);
+    const commentLen = buf.readUInt16LE(pos + 32);
+    const localOff = buf.readUInt32LE(pos + 42);
+    if (pos + 46 + nameLen > buf.length) throw new Error('不是有效的 zip');
+    const rawName = decodeZipName(buf.subarray(pos + 46, pos + 46 + nameLen), flags);
+    pos += 46 + nameLen + extraLen + commentLen;
+    if (skipZipEntry(rawName)) continue;
+    const name = rawName.replace(/\\/g, '/').split('/').pop() || rawName;
+    if (flags & 1) {
+      entries.push({ name, error: '压缩包里的文件已加密' });
+      continue;
+    }
+    if (compSize === 0xffffffff || uncompSize === 0xffffffff || localOff === 0xffffffff) {
+      entries.push({ name, error: '不支持超大压缩包' });
+      continue;
+    }
+    const image = /\.(png|jpe?g|webp)$/i.test(name);
+    if (image) {
+      images += 1;
+      if (images > 100) {
+        entries.push({ name, error: '一次最多 100 张' });
+        continue;
+      }
+    }
+    if (uncompSize > MAX_ENTRY || compSize > MAX_ENTRY) {
+      entries.push({ name, error: '单张不能超过 15MB' });
+      continue;
+    }
+    if (localOff + 30 > buf.length || buf.readUInt32LE(localOff) !== 0x04034b50) {
+      entries.push({ name, error: '这张图解压失败' });
+      continue;
+    }
+    const localNameLen = buf.readUInt16LE(localOff + 26);
+    const localExtraLen = buf.readUInt16LE(localOff + 28);
+    const dataStart = localOff + 30 + localNameLen + localExtraLen;
+    if (dataStart + compSize > buf.length) {
+      entries.push({ name, error: '这张图解压失败' });
+      continue;
+    }
+    if (method !== 0 && method !== 8) {
+      entries.push({ name, error: '压缩方式不支持' });
+      continue;
+    }
+    const compressed = buf.subarray(dataStart, dataStart + compSize);
+    let data: Buffer;
+    try {
+      data = method === 0 ? Buffer.from(compressed) : inflateRawSync(compressed, { maxOutputLength: MAX_ENTRY });
+    } catch {
+      entries.push({ name, error: '这张图解压失败' });
+      continue;
+    }
+    if (data.length > MAX_ENTRY || crc32(data) !== crc) {
+      entries.push({ name, error: data.length > MAX_ENTRY ? '单张不能超过 15MB' : '这张图解压失败' });
+      continue;
+    }
+    entries.push({ name, data });
+  }
+  return entries;
+}
+
+function findEocd(buf: Buffer) {
+  const min = Math.max(0, buf.length - (22 + 65535));
+  for (let i = buf.length - 22; i >= min; i -= 1) {
+    if (buf.readUInt32LE(i) !== 0x06054b50) continue;
+    const commentLen = buf.readUInt16LE(i + 20);
+    if (i + 22 + commentLen === buf.length) return i;
+  }
+  for (let i = buf.length - 22; i >= min; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) return i;
+  }
+  return -1;
+}
+
+function decodeZipName(name: Buffer, flags: number) {
+  if (flags & 0x800) return name.toString('utf8');
+  const utf8 = name.toString('utf8');
+  if (!utf8.includes('\uFFFD')) return utf8;
+  return name.toString('latin1');
+}
+
+function skipZipEntry(name: string) {
+  const norm = name.replace(/\\/g, '/');
+  if (!norm || norm.endsWith('/')) return true;
+  const parts = norm.split('/').filter(Boolean);
+  if (!parts.length) return true;
+  if (parts.some((part) => part === '__MACOSX' || part.startsWith('.'))) return true;
+  return false;
 }
 
 function uniqueZipName(name: string, used: Map<string, number>) {

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { dailyListSchema, dailyStatSchema, evidenceArchiveSchema, forcePublishSchema, importConfirmSchema, importIgnoreSchema, importMappingSchema, importMarkSchema, importPatchRowSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
 import { z } from 'zod';
@@ -150,6 +150,13 @@ export class MetricsController {
   async archiveZip(@CurrentUser() user: AuthUser, @Body(new ZodPipe(evidenceArchiveSchema)) body: z.infer<typeof evidenceArchiveSchema>) {
     const zip = await this.metrics.archiveEvidence(user, body.fileKeys);
     return new StreamableFile(zip, { type: 'application/zip', disposition: 'attachment; filename="evidence.zip"' });
+  }
+
+  @Post('evidence/upload-zip')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 80 * 1024 * 1024 } }))
+  uploadZip(@CurrentUser() user: AuthUser, @UploadedFile() file?: Express.Multer.File) {
+    if (!file?.buffer?.length) throw new BadRequestException('请上传 zip');
+    return this.metrics.uploadEvidenceZip(user, file.buffer);
   }
 
   @Post('watermarks')

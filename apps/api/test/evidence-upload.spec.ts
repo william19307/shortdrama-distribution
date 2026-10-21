@@ -2,8 +2,10 @@ import { INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { hashSync } from 'bcryptjs';
 import request from 'supertest';
+import { deflateRawSync } from 'zlib';
 import { buildApp } from '../src/main';
 import { S3StorageService } from '../src/core/storage.service';
+import { zipStore } from '../src/core/zip';
 
 const PASS = 'Demo123456';
 const PNG = Buffer.from(
@@ -125,6 +127,38 @@ describe('水印工单号、截图打包和未完成分片', () => {
     expect(zip.body.includes(Buffer.from(shot.body.ticketCode))).toBe(true);
   });
 
+  it('DS-12 上传截图 zip 后逐张校验并自动归档', async () => {
+    const http = authed(ops);
+    const platform = await prisma.platform.findUnique({ where: { id: platformId } });
+    const drama = await prisma.drama.findUnique({ where: { id: dramaId } });
+    const matchedName = `${platform?.code}_${drama?.code}_20261003_DATA_1.png`;
+    const stored = zipStore([
+      { name: matchedName, data: PNG },
+      { name: 'note.txt', data: Buffer.from('not an image') },
+    ]);
+    const denied = await authed(client).post('/api/evidence/upload-zip').attach('file', stored, 'shots.zip');
+    expect(denied.status).toBe(403);
+    const bad = await http.post('/api/evidence/upload-zip').attach('file', Buffer.from('hello'), 'bad.zip');
+    expect(bad.status).toBe(400);
+    const uploaded = await http.post('/api/evidence/upload-zip').attach('file', stored, 'shots.zip');
+    expect(uploaded.status).toBeLessThan(300);
+    expect(uploaded.body.succeeded).toBe(1);
+    expect(uploaded.body.archived).toBe(1);
+    expect(uploaded.body.failed).toBe(1);
+    expect(uploaded.body.items[0].ok).toBe(true);
+    expect(uploaded.body.items[0].status).toBe('ARCHIVED');
+    expect(uploaded.body.items[0].ticketCode).toMatch(/^GD/);
+    expect(uploaded.body.items[1].ok).toBe(false);
+    expect(String(uploaded.body.items[1].error)).toMatch(/png|jpg/);
+    const listed = await http.get('/api/watermarks');
+    expect(listed.body.some((item: { ticketCode: string }) => item.ticketCode === uploaded.body.items[0].ticketCode)).toBe(true);
+    const deflated = zipDeflate(`${platform?.code}_${drama?.code}_20261004_DATA_2.png`, PNG);
+    const second = await http.post('/api/evidence/upload-zip').attach('file', deflated, 'deflate.zip');
+    expect(second.status).toBeLessThan(300);
+    expect(second.body.archived).toBe(1);
+    expect(second.body.items[0].ticketCode).toMatch(/^GD/);
+  });
+
   it('VL-04 未完成的大文件出现在上传队列，同一部只计一次', async () => {
     const http = authed(client);
     const size = 500 * 1024 * 1024;
@@ -139,3 +173,44 @@ describe('水印工单号、截图打包和未完成分片', () => {
     expect(list.body.items.map((item: { fileName: string }) => item.fileName).sort()).toEqual(['第001集.mp4', '第002集.mp4']);
   });
 });
+
+function zipCrc(buf: Buffer) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i += 1) {
+    crc ^= buf[i];
+    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+  }
+  return (~crc) >>> 0;
+}
+
+function zipDeflate(name: string, data: Buffer) {
+  const compressed = deflateRawSync(data);
+  const nameBuf = Buffer.from(name, 'utf8');
+  const crc = zipCrc(data);
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt16LE(0x0800, 6);
+  local.writeUInt16LE(8, 8);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(compressed.length, 18);
+  local.writeUInt32LE(data.length, 22);
+  local.writeUInt16LE(nameBuf.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt16LE(0x0800, 8);
+  central.writeUInt16LE(8, 10);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(compressed.length, 20);
+  central.writeUInt32LE(data.length, 24);
+  central.writeUInt16LE(nameBuf.length, 28);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(46 + nameBuf.length, 12);
+  end.writeUInt32LE(30 + nameBuf.length + compressed.length, 16);
+  return Buffer.concat([local, nameBuf, compressed, central, nameBuf, end]);
+}

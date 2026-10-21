@@ -40,7 +40,7 @@ services:
     environment:
       NODE_ENV: production
       SEED_DEMO: "true"
-      UPLOAD_VIA_API: "true"
+      UPLOAD_VIA_API: "false"
       PORT: "3000"
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       JWT_SECRET: ${JWT_SECRET}

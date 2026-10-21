@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
-import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, Injectable } from '@nestjs/common';
+import sharp from 'sharp';
 import { Prisma } from '@prisma/client';
 import {
   clientPhaseFromPlans,
@@ -16,7 +17,7 @@ import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
-import { zipStore } from '../core/zip';
+import { unzip, zipStore } from '../core/zip';
 import { StorageService } from '../core/storage.service';
 import { shanghaiStamp, stampImage } from './watermark';
 import { dailyListSchema, dailyStatSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
@@ -190,6 +191,79 @@ export class MetricsService {
     } catch {
       throw new BadRequestException('原始截图还没有上传完成');
     }
+    const shot = await this.persistWatermark(user, original, input);
+    const url = shot.watermarkedKey ? await this.storage.presignGet(shot.watermarkedKey) : null;
+    return { ...shot, url };
+  }
+
+  async uploadEvidenceZip(user: AuthUser, zip: Buffer) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD']);
+    let entries;
+    try {
+      entries = unzip(zip);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      throw new BadRequestException(message === '不支持超大压缩包' || message === '不是有效的 zip' ? message : '不是有效的 zip');
+    }
+    if (!entries.length) throw new BadRequestException('压缩包里没有文件');
+    const fallbackCompanyId = await this.soleCompanyId(user);
+    const items: { filename: string; ok: boolean; status?: string; id?: string; ticketCode?: string; error?: string }[] = [];
+    for (const entry of entries) {
+      if (entry.error || !entry.data) {
+        items.push({ filename: entry.name, ok: false, error: entry.error || '这张图解压失败' });
+        continue;
+      }
+      if (!/\.(png|jpe?g|webp)$/i.test(entry.name)) {
+        items.push({ filename: entry.name, ok: false, error: '只接受 png、jpg、webp' });
+        continue;
+      }
+      try {
+        const shot = await this.persistWatermark(user, entry.data, {
+          filename: entry.name,
+          unmatchedCompanyId: fallbackCompanyId,
+          storeOriginal: true,
+        });
+        items.push({
+          filename: entry.name,
+          ok: true,
+          status: shot.status,
+          id: shot.id,
+          ticketCode: shot.ticketCode || undefined,
+        });
+      } catch (err) {
+        const error = err instanceof HttpException ? err.message : '这张图无法加水印，请上传 png 或 jpg';
+        items.push({ filename: entry.name, ok: false, error });
+      }
+    }
+    const succeeded = items.filter((item) => item.ok).length;
+    const archived = items.filter((item) => item.ok && item.status === 'ARCHIVED').length;
+    const failed = items.length - succeeded;
+    await this.audit.write(user.id, 'evidence.upload', 'WatermarkShot', items.find((item) => item.id)?.id || 'zip', { succeeded, archived, failed });
+    return { succeeded, archived, failed, items };
+  }
+
+  private async soleCompanyId(user: AuthUser) {
+    const where: Prisma.CompanyWhereInput = user.role === 'OPS' ? { ownerId: user.id } : user.role === 'BD' ? { bdId: user.id } : {};
+    const rows = await this.prisma.company.findMany({ where, select: { id: true }, take: 2 });
+    return rows.length === 1 ? rows[0].id : null;
+  }
+
+  private async persistWatermark(
+    user: AuthUser,
+    original: Buffer,
+    input: {
+      fileKey?: string;
+      filename?: string;
+      dramaId?: string;
+      platformId?: string;
+      shotDate?: string | null;
+      kind?: 'LISTING' | 'DATA' | 'DELIST';
+      unmatchedCompanyId?: string | null;
+      storeOriginal?: boolean;
+    },
+  ) {
+    await this.assertImage(original);
     const originalSha = createHash('sha256').update(original).digest('hex');
     const parsed = input.filename ? parseWatermarkFilename(input.filename) : null;
     let drama = input.dramaId ? await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }) : null;
@@ -210,22 +284,32 @@ export class MetricsService {
     if (!shotDate && parsed?.date) shotDate = parsed.date;
     if (drama && (user.role === 'OPS' || user.role === 'BD')) assertCompanyAccess(user, drama.company);
     if (!drama || !platform || !shotDate) fail = fail || '缺少剧目、平台或日期，进入待归档';
+    const companyForKey = drama?.companyId || (input.unmatchedCompanyId !== undefined ? input.unmatchedCompanyId : input.fileKey?.split('/')[0]);
+    if (!companyForKey) throw new BadRequestException('没有匹配到剧目，也没有可归属的客户');
     const matched = !fail && drama && platform && shotDate ? { drama, platform, shotDate } : null;
     const ticket = matched
       ? await this.ensureTicket(matched.drama.companyId, matched.drama.id, matched.drama.title, matched.platform.name, matched.shotDate, user.id)
       : null;
     const stamped = await this.stampShot(original, originalSha, platform?.name || parsed?.platformCode || '平台', drama?.title || parsed?.dramaToken || '剧目', user.name, ticket?.code || '');
     const sha256 = createHash('sha256').update(stamped.bytes).digest('hex');
-    const key = `${drama?.companyId || input.fileKey.split('/')[0]}/watermark/${sha256.slice(0, 16)}.png`;
+    const key = `${companyForKey}/watermark/${sha256.slice(0, 16)}.png`;
     await this.storage.putObject(key, stamped.bytes, 'image/png');
+    let originalKey = input.fileKey || '';
+    if (input.storeOriginal) {
+      const lower = (input.filename || '').toLowerCase();
+      const ext = lower.endsWith('.webp') ? '.webp' : lower.endsWith('.png') ? '.png' : '.jpg';
+      const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      originalKey = `${companyForKey}/watermark-src/${originalSha.slice(0, 16)}${ext}`;
+      await this.storage.putObject(originalKey, original, contentType);
+    }
     const shot = await this.prisma.watermarkShot.create({
       data: {
-        companyId: drama?.companyId,
+        companyId: drama?.companyId || input.unmatchedCompanyId || undefined,
         dramaId: drama?.id,
         platformId: platform?.id,
         shotDate: shotDate ? day(shotDate) : null,
         kind: input.kind || parsed?.kind || 'DATA',
-        originalKey: input.fileKey,
+        originalKey,
         watermarkedKey: key,
         sha256,
         shortHash: sha256.slice(0, 12),
@@ -238,8 +322,17 @@ export class MetricsService {
       },
     });
     await this.audit.write(user.id, 'watermark.create', 'WatermarkShot', shot.id, { sha256, ticketCode: shot.ticketCode });
-    const url = await this.storage.presignGet(key);
-    return { ...shot, url };
+    return shot;
+  }
+
+  private async assertImage(original: Buffer) {
+    try {
+      const meta = await sharp(original).metadata();
+      if (!meta.width || !meta.format || !['png', 'jpeg', 'webp'].includes(meta.format)) throw new BadRequestException('不是有效的图片');
+    } catch (err) {
+      if (err instanceof BadRequestException) throw err;
+      throw new BadRequestException('不是有效的图片');
+    }
   }
 
   async assignWatermark(user: AuthUser, id: string, input: z.infer<typeof watermarkAssignSchema>) {
