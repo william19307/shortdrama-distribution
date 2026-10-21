@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { dramaBatchSchema, dramaCreateSchema, dramaListSchema, dramaPatchSchema, dramaSelectionSchema, partAckSchema, partSignSchema, uploadCompleteSchema, uploadInitSchema } from '@shortform/shared';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { dramaBatchSchema, dramaCreateSchema, dramaListSchema, dramaPatchSchema, dramaSelectionSchema, folderPreviewSchema, partAckSchema, partSignSchema, uploadCompleteSchema, uploadInitSchema } from '@shortform/shared';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
@@ -40,6 +41,29 @@ export class CatalogController {
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="dramas.csv"');
     res.send(`\uFEFF${csv}`);
+  }
+
+  @Get('dramas/metadata-template')
+  async metadataTemplate() {
+    const body = await this.catalog.metadataTemplate();
+    return new StreamableFile(body, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: 'attachment; filename="metadata-template.xlsx"' });
+  }
+
+  @Post('dramas/metadata-import')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
+  importMetadata(@CurrentUser() user: AuthUser, @UploadedFile() file?: { buffer: Buffer }) {
+    if (!file?.buffer?.length) throw new BadRequestException('请上传 Excel');
+    return this.catalog.importMetadata(user, file.buffer);
+  }
+
+  @Post('library/folder-preview')
+  previewFolder(@CurrentUser() user: AuthUser, @Body(new ZodPipe(folderPreviewSchema)) body: z.infer<typeof folderPreviewSchema>) {
+    return this.catalog.previewFolder(user, body);
+  }
+
+  @Post('library/folder-apply')
+  applyFolder(@CurrentUser() user: AuthUser, @Body(new ZodPipe(folderPreviewSchema)) body: z.infer<typeof folderPreviewSchema>) {
+    return this.catalog.applyFolder(user, body);
   }
 
   @Post('dramas')

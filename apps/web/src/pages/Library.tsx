@@ -1,6 +1,6 @@
 import { PlaySquareOutlined } from '@ant-design/icons';
 import { motion as motionTokens } from '@ds/tokens';
-import { Button, Checkbox, Input, Segmented, Select, Space, Table, Typography } from 'antd';
+import { Button, Checkbox, Input, Modal, Segmented, Select, Space, Table, Typography, Upload } from 'antd';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -17,6 +17,7 @@ interface DramaCard {
   language: string;
   phase: string;
   coverUrl: string | null;
+  techLabel?: string | null;
   updatedAt: string;
   company?: { name: string };
   _count?: { episodes: number };
@@ -35,6 +36,7 @@ export function LibraryPage() {
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [notice, setNotice] = useState('');
+  const [folder, setFolder] = useState<{ title: string; episodes: { no: number; fileName: string }[]; cover?: string; poster?: string; trailer?: string; subtitles: string[]; conflicts: string[] }[] | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -54,6 +56,47 @@ export function LibraryPage() {
         extra={client ? <Button type="primary" onClick={() => nav('/dramas/new')}>新建剧目</Button> : <Button onClick={() => download(`/dramas/export${qs({ q, phase })}`, 'dramas.csv').catch((err) => setError(err.message))}>导出</Button>}
       />
       <ErrorNote error={error} />
+      {client ? (
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Upload directory multiple showUploadList={false} beforeUpload={(file, list) => {
+            if (file !== list[list.length - 1]) return false;
+            const paths = list.map((item) => (item as File & { webkitRelativePath?: string }).webkitRelativePath || item.name).filter(Boolean);
+            api<{ dramas: NonNullable<typeof folder> }>('/library/folder-preview', { method: 'POST', json: { paths } }).then((res) => setFolder(res.dramas)).catch((err) => setError(err.message));
+            return false;
+          }}><Button type="primary">上传文件夹</Button></Upload>
+          <Button onClick={() => download('/dramas/metadata-template', 'metadata-template.xlsx')}>下载元数据模板</Button>
+          <Upload accept=".xlsx" showUploadList={false} beforeUpload={async (file) => {
+            const body = new FormData();
+            body.append('file', file);
+            try {
+              const res = await api<{ applied: number; failed: number; rows: { rowNo: number; error: string }[] }>('/dramas/metadata-import', { method: 'POST', body });
+              setNotice(`元数据已导入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}`);
+              if (res.failed) setError(res.rows.filter((row) => row.error).map((row) => row.error).join('；'));
+              load();
+            } catch (err) { setError(err instanceof Error ? err.message : '没有导入'); }
+            return false;
+          }}><Button>导入元数据</Button></Upload>
+        </Space>
+      ) : null}
+      <Modal title="匹配确认" open={Boolean(folder)} onCancel={() => setFolder(null)} okText="全部确认" onOk={async () => {
+        if (!folder) return;
+        const paths = folder.flatMap((drama) => [
+          ...drama.episodes.map((episode) => `${drama.title}/${episode.fileName}`),
+          drama.cover, drama.poster, drama.trailer, ...drama.subtitles,
+        ].filter((item): item is string => Boolean(item)));
+        await api('/library/folder-apply', { method: 'POST', json: { paths } });
+        setFolder(null);
+        setNotice('文件夹已确认');
+        load();
+      }}>
+        {(folder || []).map((drama) => (
+          <div key={drama.title} style={{ marginBottom: 12 }}>
+            <b>{drama.title}</b>
+            <div>{drama.episodes.length} 集已识别{drama.cover ? ' · 封面' : ''}{drama.poster ? ' · 海报' : ''}{drama.trailer ? ' · 预告' : ''}{drama.subtitles.length ? ' · 字幕' : ''}</div>
+            {drama.conflicts.map((item) => <div key={item} style={{ color: '#cf1322' }}>{item}</div>)}
+          </div>
+        ))}
+      </Modal>
       <Space wrap style={{ marginBottom: 16 }}>
         <Input.Search allowClear placeholder="剧名、外文名或编号" style={{ width: 260 }} onSearch={(value) => { setPage(1); setQ(value); }} />
         <Select
@@ -79,7 +122,7 @@ export function LibraryPage() {
                       <div className="ds-poster__kicker">{drama.code}</div>
                       <div className="ds-poster__title">{drama.title}</div>
                     </div>
-                    <div className="ds-poster__badge"><PhaseTag phase={drama.phase} /></div>
+                    <div className="ds-poster__badge"><PhaseTag phase={drama.phase} />{drama.techLabel ? <span style={{ marginLeft: 6 }}>{drama.techLabel}</span> : null}</div>
                     <div className="ds-poster__info">{drama.genre || '未分题材'} · {drama.language} · {drama._count?.episodes ?? 0} 集</div>
                   </motion.button>
                 ))}

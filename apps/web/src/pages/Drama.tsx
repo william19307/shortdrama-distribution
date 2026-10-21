@@ -7,7 +7,7 @@ import { useAuth } from '../auth';
 import { EPISODE_CLIENT, ErrorNote, PageHead, PhaseTag, PlatformChip, StatusTag, labelOf } from '../ui';
 
 interface Platform { id: string; name: string; firstBatch: boolean; enabled: boolean }
-interface Episode { id: string; no: number; fileName: string | null; reviewStatus: string; rejectReason: string | null; fileSize: string | null }
+interface Episode { id: string; no: number; fileName: string | null; reviewStatus: string; rejectReason: string | null; fileSize: string | null; techStatus?: string; techNote?: string }
 interface Asset { id: string; type: string; name: string; fileKey: string; reviewStatus?: string; rejectReason?: string | null }
 interface Plan {
   id: string; code: string; status: string; round: string; statusLabel?: string; phase?: string; phaseLabel?: string;
@@ -160,6 +160,7 @@ export function DramaPage() {
                     { title: '集', dataIndex: 'no', width: 70 },
                     { title: '文件', dataIndex: 'fileName', render: (value) => value || '未上传' },
                     { title: '大小', dataIndex: 'fileSize', width: 120, render: (value) => value ? `${(Number(value) / 1024 / 1024).toFixed(1)} MB` : '—' },
+                    { title: '技术校验', dataIndex: 'techStatus', render: (value: string, row: Episode) => value && value !== 'NONE' ? <span>{value === 'CHECKING' ? '校验中' : value === 'READY' ? '可发行' : value === 'FAILED' ? '校验失败' : value} {row.techNote || ''}</span> : '—' },
                     { title: '审核', dataIndex: 'reviewStatus', render: (value, row: Episode) => <span><StatusTag status={value} text={client ? EPISODE_CLIENT[value] || labelOf(value) : undefined} /> {row.rejectReason ? <span style={{ color: 'var(--ds-text-2)' }}>{row.rejectReason}</span> : null}</span> },
                   ]} />
                 </Space>

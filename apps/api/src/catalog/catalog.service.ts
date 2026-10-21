@@ -1,5 +1,11 @@
+import { execFile } from 'child_process';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { promisify } from 'util';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PlanStatus, Prisma, UploadSession } from '@prisma/client';
+import ExcelJS from 'exceljs';
 import {
   PART_SIZE,
   SINGLE_PUT_MAX,
@@ -9,7 +15,9 @@ import {
   dramaListSchema,
   dramaPatchSchema,
   dramaSelectionSchema,
+  folderPreviewSchema,
   normalizeName,
+  recognizeFolder,
   uploadInitSchema,
   type DramaListQuery,
 } from '@shortform/shared';
@@ -39,6 +47,7 @@ export class CatalogService {
         include: {
           plans: { select: { id: true, status: true, round: true, code: true } },
           company: { select: { id: true, name: true } },
+          episodes: { select: { techStatus: true, fileKey: true } },
           _count: { select: { episodes: true } },
         },
       }),
@@ -71,6 +80,106 @@ export class CatalogService {
       });
     }
     return { updated: dramas.length };
+  }
+
+  previewFolder(user: AuthUser, input: z.infer<typeof folderPreviewSchema>) {
+    this.clientCompany(user);
+    return { dramas: recognizeFolder(input.paths) };
+  }
+
+  async applyFolder(user: AuthUser, input: z.infer<typeof folderPreviewSchema>) {
+    const companyId = this.clientCompany(user);
+    const recognized = recognizeFolder(input.paths);
+    if (!recognized.length) throw new BadRequestException('没有识别到剧名目录，请按「剧名/第001集.mp4」组织');
+    const dramas = [];
+    for (const group of recognized) {
+      const nameNorm = normalizeName(group.title);
+      const existing = await this.prisma.drama.findFirst({ where: { companyId, nameNorm } });
+      const drama = existing ?? await this.prisma.$transaction(async (tx) => tx.drama.create({
+        data: { code: await nextCode(tx, 'D'), companyId, title: group.title, nameNorm, language: '英语' },
+      }));
+      for (const episode of group.episodes) {
+        await this.prisma.episode.upsert({
+          where: { dramaId_no: { dramaId: drama.id, no: episode.no } },
+          create: { dramaId: drama.id, no: episode.no, fileName: episode.fileName },
+          update: { fileName: episode.fileName },
+        });
+      }
+      dramas.push({ id: drama.id, title: drama.title, episodes: group.episodes.length, cover: group.cover || null, poster: group.poster || null, trailer: group.trailer || null, subtitles: group.subtitles, conflicts: group.conflicts });
+    }
+    return { dramas };
+  }
+
+  async metadataTemplate() {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet('元数据');
+    sheet.addRow(['剧名', '语言', '集数', '外文名', '题材', '简介', '标签', '文件名', '集号']);
+    sheet.addRow(['剧A', '英语', 60, 'Drama A', '都市', '', '热门', '第001集.mp4', 1]);
+    return Buffer.from(await book.xlsx.writeBuffer());
+  }
+
+  async importMetadata(user: AuthUser, file: Buffer) {
+    const companyId = this.clientCompany(user);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(file as unknown as ExcelJS.Buffer);
+    const sheet = book.worksheets[0];
+    if (!sheet) throw new BadRequestException('工作表为空');
+    const header = sheet.getRow(1).values as ExcelJS.CellValue[];
+    const col = (name: string) => header.findIndex((cell) => cellText(cell) === name);
+    const titleCol = col('剧名');
+    const langCol = col('语言');
+    const countCol = col('集数');
+    if (titleCol < 0 || langCol < 0 || countCol < 0) throw new BadRequestException('模板必须包含剧名、语言、集数');
+    const rows: { rowNo: number; ok: boolean; error: string }[] = [];
+    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo += 1) {
+      const row = sheet.getRow(rowNo);
+      const title = cellText(row.getCell(titleCol).value);
+      const language = cellText(row.getCell(langCol).value);
+      const countRaw = cellText(row.getCell(countCol).value);
+      const fileName = col('文件名') > 0 ? cellText(row.getCell(col('文件名')).value) : '';
+      const episodeRaw = col('集号') > 0 ? cellText(row.getCell(col('集号')).value) : '';
+      if (!title && !language && !countRaw) continue;
+      const missing = [!title ? '剧名' : '', !language ? '语言' : '', !countRaw ? '集数' : ''].filter(Boolean);
+      if (missing.length || !/^\d+$/.test(countRaw)) {
+        rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行缺少必填列：${missing.length ? missing.join('、') : '集数'}` });
+        continue;
+      }
+      const nameNorm = normalizeName(title);
+      const existing = await this.prisma.drama.findFirst({ where: { companyId, nameNorm } });
+      const drama = existing ?? await this.prisma.$transaction(async (tx) => tx.drama.create({
+        data: { code: await nextCode(tx, 'D'), companyId, title, nameNorm, language, episodeCountExpected: Number(countRaw) },
+      }));
+      await this.prisma.drama.update({
+        where: { id: drama.id },
+        data: {
+          language,
+          episodeCountExpected: Number(countRaw),
+          titleEn: col('外文名') > 0 ? cellText(row.getCell(col('外文名')).value) || undefined : undefined,
+          genre: col('题材') > 0 ? cellText(row.getCell(col('题材')).value) || undefined : undefined,
+          synopsis: col('简介') > 0 ? cellText(row.getCell(col('简介')).value) || undefined : undefined,
+        },
+      });
+      if (fileName) {
+        const episode = await this.prisma.episode.findFirst({ where: { fileName, drama: { companyId, id: drama.id } } });
+        if (!episode) {
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按文件名匹配到文件` });
+          continue;
+        }
+      } else if (episodeRaw) {
+        if (!/^\d+$/.test(episodeRaw)) {
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行集号不正确` });
+          continue;
+        }
+        const episode = await this.prisma.episode.findFirst({ where: { no: Number(episodeRaw), dramaId: drama.id } });
+        if (!episode) {
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按剧名和集号匹配到文件` });
+          continue;
+        }
+      }
+      rows.push({ rowNo, ok: true, error: '' });
+    }
+    if (!rows.length) throw new BadRequestException('没有读到剧目');
+    return { rows, applied: rows.filter((row) => row.ok).length, failed: rows.filter((row) => !row.ok).length };
   }
 
   async exportCsv(user: AuthUser, query: DramaListQuery & { ids?: string[] }) {
@@ -246,7 +355,7 @@ export class CatalogService {
     await this.applyUpload(user, session);
     await this.prisma.uploadSession.update({ where: { id }, data: { status: 'COMPLETED' } });
     await this.audit.write(user.id, 'upload.complete', 'UploadSession', id, { key: session.key, purpose: session.purpose });
-    return { id, key: session.key, status: 'COMPLETED' };
+    return { id, key: session.key, status: 'COMPLETED', techStatus: session.purpose === 'EPISODE' ? 'CHECKING' : undefined };
   }
 
   async signRead(user: AuthUser, key: string) {
@@ -281,7 +390,7 @@ export class CatalogService {
       if (existing?.reviewStatus === 'REJECTED') reviewStatus = 'REPLACED';
       else if (existing?.reviewStatus === 'APPROVED' && existing.fingerprint && existing.fingerprint !== fingerprint) reviewStatus = 'PENDING';
       else if (existing?.reviewStatus === 'UNSAMPLED') reviewStatus = 'UNSAMPLED';
-      await this.prisma.episode.upsert({
+      const saved = await this.prisma.episode.upsert({
         where: { dramaId_no: { dramaId: session.dramaId, no: session.episodeNo } },
         create: {
           dramaId: session.dramaId,
@@ -292,6 +401,8 @@ export class CatalogService {
           contentType: session.contentType,
           fingerprint,
           reviewStatus: 'PENDING',
+          techStatus: 'CHECKING',
+          techNote: '',
         },
         update: {
           fileKey: session.key,
@@ -301,8 +412,38 @@ export class CatalogService {
           fingerprint,
           reviewStatus,
           rejectReason: reviewStatus === 'REPLACED' ? existing?.rejectReason : null,
+          techStatus: 'CHECKING',
+          techNote: '',
+          durationSec: null,
+          width: null,
+          height: null,
         },
       });
+      this.scheduleProbe(saved.id);
+    }
+  }
+
+  private scheduleProbe(episodeId: string) {
+    setImmediate(() => {
+      void this.probeEpisode(episodeId);
+    });
+  }
+
+  private async probeEpisode(episodeId: string) {
+    const episode = await this.prisma.episode.findUnique({ where: { id: episodeId } });
+    if (!episode?.fileKey) return;
+    try {
+      const bytes = await this.storage.getObject(episode.fileKey);
+      const result = await probeBuffer(bytes);
+      await this.prisma.episode.update({
+        where: { id: episodeId },
+        data: { techStatus: result.ok ? 'READY' : 'FAILED', techNote: result.note, durationSec: result.durationSec, width: result.width, height: result.height },
+      });
+    } catch (error) {
+      await this.prisma.episode.update({
+        where: { id: episodeId },
+        data: { techStatus: 'FAILED', techNote: error instanceof Error ? error.message : '文件损坏或无法读取' },
+      }).catch(() => undefined);
     }
   }
 
@@ -447,10 +588,11 @@ export class CatalogService {
     return drama;
   }
 
-  private async card(row: { coverKey: string | null; plans: { status: string }[] } & Record<string, unknown>) {
+  private async card(row: { coverKey: string | null; plans: { status: string }[]; episodes?: { techStatus: string; fileKey: string | null }[] } & Record<string, unknown>) {
     return {
       ...row,
       phase: clientPhaseFromPlans(row.plans.map((plan) => plan.status)),
+      techLabel: techLabel(row.episodes || []),
       coverUrl: row.coverKey ? await this.storage.presignGet(row.coverKey).catch(() => null) : null,
     };
   }
@@ -461,6 +603,49 @@ export class CatalogService {
     const company = assertFound(await this.prisma.company.findUnique({ where: { id: companyId } }), '文件不存在');
     if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
     if (user.role === 'FINANCE') throw new ForbiddenException('没有权限查看这个文件');
+  }
+}
+
+function techLabel(episodes: { techStatus: string; fileKey: string | null }[]) {
+  const files = episodes.filter((episode) => episode.fileKey);
+  if (!files.length) return null;
+  if (files.some((episode) => episode.techStatus === 'CHECKING')) return '校验中';
+  if (files.some((episode) => episode.techStatus === 'FAILED')) return '有问题';
+  if (files.every((episode) => episode.techStatus === 'READY')) return '可发行';
+  return null;
+}
+
+function cellText(value: ExcelJS.CellValue): string {
+  if (value == null) return '';
+  if (typeof value === 'object' && 'text' in value && value.text) return String(value.text).trim();
+  if (typeof value === 'object' && 'result' in value) return cellText(value.result as ExcelJS.CellValue);
+  return String(value).trim();
+}
+
+const execFileAsync = promisify(execFile);
+
+async function probeBuffer(bytes: Buffer) {
+  const dir = await mkdtemp(join(tmpdir(), 'probe-'));
+  const file = join(dir, 'clip.mp4');
+  try {
+    await writeFile(file, bytes);
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', file], { timeout: 20000 });
+    const parsed = JSON.parse(stdout) as { streams?: { codec_type?: string; codec_name?: string; width?: number; height?: number }[]; format?: { duration?: string; format_name?: string } };
+    const video = parsed.streams?.find((stream) => stream.codec_type === 'video');
+    const duration = Number(parsed.format?.duration || 0);
+    const width = video?.width || 0;
+    const height = video?.height || 0;
+    const format = parsed.format?.format_name || '';
+    const codec = video?.codec_name || '';
+    if (!video || !/mp4|mov|m4v/.test(format)) return { ok: false, note: '文件损坏或格式无法识别', durationSec: null, width: width || null, height: height || null };
+    if (!['h264', 'hevc', 'av1'].includes(codec)) return { ok: false, note: `编码 ${codec || '未知'} 不在支持范围`, durationSec: Math.round(duration) || null, width, height };
+    if (Math.min(width, height) < 720) return { ok: false, note: `分辨率 ${width}x${height} 不足，短边至少 720`, durationSec: Math.round(duration) || null, width, height };
+    if (!Number.isFinite(duration) || duration < 1) return { ok: false, note: '时长无法识别或短于 1 秒', durationSec: null, width, height };
+    return { ok: true, note: '', durationSec: Math.round(duration), width, height };
+  } catch {
+    return { ok: false, note: '文件损坏或格式无法识别', durationSec: null, width: null, height: null };
+  } finally {
+    await rm(dir, { recursive: true, force: true });
   }
 }
 

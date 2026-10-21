@@ -348,6 +348,11 @@ model Episode {
   contentType  String?
   fingerprint  String?
   reviewStatus EpisodeReviewStatus @default(PENDING)
+  techStatus   String              @default("NONE")
+  techNote     String              @default("")
+  durationSec  Int?
+  width        Int?
+  height       Int?
   rejectReason String?
   createdAt    DateTime            @default(now())
   updatedAt    DateTime            @updatedAt
