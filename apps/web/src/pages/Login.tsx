@@ -5,11 +5,13 @@ import { useNavigate } from 'react-router-dom';
 import { homeFor, useAuth } from '../auth';
 
 const DEMOS = [
-  ['星河影业 · 客户', 'client@xinghe.example'],
-  ['青柠文化 · 客户', 'client@qingning.example'],
-  ['运营 · 林晓', 'ops@studio.example'],
+  ['已认证客户A · 林可', 'client@xinghe.example'],
+  ['未认证客户B · 未仁', 'client-b@weiren.example'],
+  ['新客户（无数据）', 'client-new@example.com'],
+  ['青柠文化 · 周宁', 'client@qingning.example'],
+  ['运营专员甲 · 林晓', 'ops@studio.example'],
+  ['运营专员乙 · 王倩', 'ops2@studio.example'],
   ['运营主管 · 孙悦', 'ops-manager@studio.example'],
-  ['专员乙 · 王倩', 'ops2@studio.example'],
   ['商务 · 陈宇', 'bd@studio.example'],
   ['财务 · 赵倩', 'finance@studio.example'],
   ['管理员 · 周岚', 'admin@studio.example'],

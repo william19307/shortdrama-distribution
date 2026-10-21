@@ -312,7 +312,7 @@ async function main() {
   for (const prefix of ['D', 'PL', 'GD', 'HT', 'JS', 'TX', 'PF']) {
     await prisma.counter.upsert({ where: { id: prefix }, create: { id: prefix, value: 20000 }, update: { value: { set: 20000 } } });
   }
-  console.log('种子数据已写入。客户 client@xinghe.example / client-b@weiren.example(未认证) / client-new@example.com(新客户) / 专员 ops@studio.example / 专员乙 ops2@studio.example / 主管 ops-manager@studio.example / 商务 bd@studio.example / 财务 finance@studio.example / 管理员 admin@studio.example ，密码 Demo123456');
+  console.log('种子数据已写入。已认证客户A client@xinghe.example / 未认证客户B client-b@weiren.example / 新客户（无数据）client-new@example.com / 运营专员甲 ops@studio.example / 运营专员乙 ops2@studio.example / 运营主管 ops-manager@studio.example / 商务 bd@studio.example / 财务 finance@studio.example / 管理员 admin@studio.example ，密码 Demo123456');
 }
 
 async function ensureDemoClients(passwordHash: string) {

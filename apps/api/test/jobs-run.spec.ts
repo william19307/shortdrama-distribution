@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { hashSync } from 'bcryptjs';
 import request from 'supertest';
+import { jobScheduleFromEnv } from '../src/jobs/jobs.service';
 import { buildApp } from '../src/main';
 
 const PASS = 'Demo123456';
@@ -16,6 +17,36 @@ async function login(email: string) {
   expect(res.status).toBeLessThan(300);
   return res.body.accessToken as string;
 }
+
+describe('定时任务时刻', () => {
+  it('默认 05:00 预警、06:00 超时、01:00 出单，可用环境变量覆盖', () => {
+    expect(jobScheduleFromEnv({})).toMatchObject({
+      tz: 'Asia/Shanghai',
+      ds09Warn: '0 5 * * *',
+      ds09Repeat: '*/30 * * * *',
+      ds09Escalate: '0 6 * * *',
+      rv12: '0 0,6,12,18 * * *',
+      st02: '0 1 * * *',
+      slaWarnRatio: 0.8,
+      slaDoubleRatio: 2,
+    });
+    expect(jobScheduleFromEnv({
+      CRON_TZ: 'UTC',
+      CRON_DS09_WARN: '5 5 * * *',
+      CRON_DS09_REPEAT: 'off',
+      CRON_ST02: '0 2 * * *',
+      SLA_WARN_RATIO: '0.5',
+      SLA_DOUBLE_RATIO: '3',
+    })).toMatchObject({
+      tz: 'UTC',
+      ds09Warn: '5 5 * * *',
+      ds09Repeat: null,
+      st02: '0 2 * * *',
+      slaWarnRatio: 0.5,
+      slaDoubleRatio: 3,
+    });
+  });
+});
 
 describe('手动触发定时任务', () => {
   beforeAll(async () => {

@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import cron, { ScheduledTask } from 'node-cron';
 import { AuditService } from '../core/audit.service';
 import { assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
@@ -8,11 +9,51 @@ import { NotificationsService } from '../notifications/notifications.service';
 export const JOB_NAMES = ['daily-stats-warn', 'daily-stats-escalate', 'review-sla', 'settlement-generate'] as const;
 export type JobName = (typeof JOB_NAMES)[number];
 
+export type JobSchedule = {
+  tz: string;
+  ds09Warn: string | null;
+  ds09Repeat: string | null;
+  ds09Escalate: string | null;
+  rv12: string | null;
+  st02: string | null;
+  slaWarnRatio: number;
+  slaDoubleRatio: number;
+};
+
+function cronExpr(env: NodeJS.ProcessEnv, key: string, fallback: string) {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  if (raw.trim().toLowerCase() === 'off') return null;
+  return raw.trim();
+}
+
+function ratio(env: NodeJS.ProcessEnv, key: string, fallback: number) {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return value;
+}
+
+/** 时刻与 SLA 时限。表达式填 off 可关掉这一条。 */
+export function jobScheduleFromEnv(env: NodeJS.ProcessEnv = process.env): JobSchedule {
+  return {
+    tz: env.CRON_TZ?.trim() || 'Asia/Shanghai',
+    ds09Warn: cronExpr(env, 'CRON_DS09_WARN', '0 5 * * *'),
+    ds09Repeat: cronExpr(env, 'CRON_DS09_REPEAT', '*/30 * * * *'),
+    ds09Escalate: cronExpr(env, 'CRON_DS09_ESCALATE', '0 6 * * *'),
+    rv12: cronExpr(env, 'CRON_RV12', '0 0,6,12,18 * * *'),
+    st02: cronExpr(env, 'CRON_ST02', '0 1 * * *'),
+    slaWarnRatio: ratio(env, 'SLA_WARN_RATIO', 0.8),
+    slaDoubleRatio: ratio(env, 'SLA_DOUBLE_RATIO', 2),
+  };
+}
+
 @Injectable()
 export class JobsService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger(JobsService.name);
-  private timer: NodeJS.Timeout | null = null;
-  private lastSlot = '';
+  private readonly tasks: ScheduledTask[] = [];
+  private readonly schedule = jobScheduleFromEnv();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -22,11 +63,29 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     if (process.env.NODE_ENV === 'test' || process.env.JOBS_ENABLED === 'false') return;
-    this.timer = setInterval(() => void this.tick(), 60_000);
+    this.startCron(this.schedule.ds09Warn, 'DS-09 05:00 预警', () => this.dailyStatsWarn());
+    this.startCron(this.schedule.ds09Repeat, 'DS-09 未完成重复提醒', () => this.dailyStatsWarn());
+    this.startCron(this.schedule.ds09Escalate, 'DS-09 超时升级', () => this.dailyStatsEscalate());
+    this.startCron(this.schedule.rv12, 'RV-12 审核 SLA', () => this.reviewSla());
+    this.startCron(this.schedule.st02, 'ST-02 自动生成结算单', () => this.settlementGenerate());
   }
 
   onModuleDestroy() {
-    if (this.timer) clearInterval(this.timer);
+    for (const task of this.tasks) task.stop();
+    this.tasks.length = 0;
+  }
+
+  private startCron(expr: string | null, label: string, fn: () => Promise<unknown>) {
+    if (!expr) return;
+    if (!cron.validate(expr)) {
+      this.log.error(`${label} 的 cron 表达式无效：${expr}`);
+      return;
+    }
+    const task = cron.schedule(expr, () => {
+      void fn().catch((error: unknown) => this.log.error(`${label} 失败`, error instanceof Error ? error.stack : error));
+    }, { timezone: this.schedule.tz });
+    this.tasks.push(task);
+    this.log.log(`${label} 已登记 ${expr}（${this.schedule.tz}）`);
   }
 
   async run(name: string, user?: AuthUser) {
@@ -46,21 +105,6 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       default:
         throw new BadRequestException(`未知任务：${name}`);
     }
-  }
-
-  private async tick() {
-    const hour = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
-    const dayKey = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-    const slot = `${dayKey} ${hour}`;
-    if (slot === this.lastSlot) return;
-    this.lastSlot = slot;
-    const minute = hour.slice(3);
-    if (minute !== '00' && minute !== '30') return;
-    const clock = hour.slice(0, 2);
-    if (clock === '01' && minute === '00') await this.settlementGenerate();
-    await this.dailyStatsWarn();
-    if (clock === '06' && minute === '00') await this.dailyStatsEscalate();
-    if (minute === '00' && (clock === '00' || clock === '06' || clock === '12' || clock === '18')) await this.reviewSla();
   }
 
   async dailyStatsWarn() {
@@ -128,10 +172,10 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     for (const plan of open) {
       if (!plan.slaDueAt || !plan.submittedAt) continue;
       const span = Math.max(plan.slaDueAt.getTime() - plan.submittedAt.getTime(), 1);
-      const ratio = (now - plan.submittedAt.getTime()) / span;
-      if (ratio >= 2) buckets.double.push(plan.code);
+      const used = (now - plan.submittedAt.getTime()) / span;
+      if (used >= this.schedule.slaDoubleRatio) buckets.double.push(plan.code);
       else if (now >= plan.slaDueAt.getTime()) buckets.overdue.push(plan.code);
-      else if (ratio >= 0.8) buckets.warn80.push(plan.code);
+      else if (used >= this.schedule.slaWarnRatio) buckets.warn80.push(plan.code);
     }
     const message = `[RV-12] SLA 巡检：80%预警 ${buckets.warn80.length}、超时 ${buckets.overdue.length}、2倍 ${buckets.double.length}`;
     const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
