@@ -1,4 +1,4 @@
-export const ROLES = ['CLIENT', 'OPS', 'BD', 'FINANCE', 'ADMIN'] as const;
+export const ROLES = ['CLIENT', 'OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const CERT_STATUSES = ['UNVERIFIED', 'PENDING', 'APPROVED', 'REJECTED', 'CHANGE_PENDING'] as const;

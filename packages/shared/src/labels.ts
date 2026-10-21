@@ -3,6 +3,7 @@ import type { ClientPhase, PlanStatus, Role } from './enums';
 export const ROLE_LABEL: Record<Role, string> = {
   CLIENT: '客户',
   OPS: '运营',
+  OPS_MANAGER: '运营主管',
   BD: '商务',
   FINANCE: '财务',
   ADMIN: '管理员',

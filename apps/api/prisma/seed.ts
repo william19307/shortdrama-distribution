@@ -15,6 +15,10 @@ const PLATFORMS = [
 ];
 
 async function main() {
+  if (process.env.SEED_DEMO !== 'true') {
+    console.log('未设置 SEED_DEMO=true，跳过演示种子。');
+    return;
+  }
   const passwordHash = await hash(PASSWORD, 10);
   for (const platform of PLATFORMS) {
     await prisma.platform.upsert({
@@ -35,9 +39,13 @@ async function main() {
   }
 
   const ops = await upsertStaff('ops@studio.example', '林晓', 'OPS', passwordHash);
+  const ops2 = await upsertStaff('ops2@studio.example', '王倩', 'OPS', passwordHash);
+  const opsManager = await upsertStaff('ops-manager@studio.example', '孙悦', 'OPS_MANAGER', passwordHash);
   const bd = await upsertStaff('bd@studio.example', '陈宇', 'BD', passwordHash);
   const finance = await upsertStaff('finance@studio.example', '赵倩', 'FINANCE', passwordHash);
   await upsertStaff('admin@studio.example', '周岚', 'ADMIN', passwordHash);
+  void ops2;
+  void opsManager;
   void bd;
   void finance;
 
@@ -51,9 +59,15 @@ async function main() {
     await prisma.exchangeRate.create({ data: { pair: 'USD->CNY', rateDate, value: new Prisma.Decimal('7.1800'), source: '中国人民银行中间价', createdById: finance.id } });
   }
 
+  await ensureDemoClients(passwordHash);
+
   const already = await prisma.user.findUnique({ where: { email: 'client@xinghe.example' } });
   if (already) {
-    console.log('种子内容已存在，跳过剧目。演示密码仍是 Demo123456');
+    await prisma.asset.updateMany({
+      where: { type: { in: ['LICENSE', 'COPYRIGHT'] }, reviewStatus: 'PENDING' },
+      data: { reviewStatus: 'APPROVED', reviewedAt: new Date() },
+    });
+    console.log('种子内容已存在，跳过剧目。已有账号的密码不会被重置。');
     return;
   }
 
@@ -137,7 +151,7 @@ async function main() {
       }
     }
     if (state !== 'PRECHECK_FAILED') {
-      await prisma.asset.create({ data: { companyId: xinghe.id, dramaId: drama.id, type: 'LICENSE', name: '授权书.pdf', fileKey: `seed/${drama.code}/license.pdf` } });
+      await prisma.asset.create({ data: { companyId: xinghe.id, dramaId: drama.id, type: 'LICENSE', name: '授权书.pdf', fileKey: `seed/${drama.code}/license.pdf`, reviewStatus: 'APPROVED', reviewedAt: new Date() } });
     }
     if (state === 'IDLE' || state === 'PRECHECK_FAILED') continue;
     const planStatus = state === 'PENDING_REVIEW' ? 'PENDING_REVIEW' : state === 'IN_REVIEW' ? 'IN_REVIEW' : state === 'NEEDS_REVISION' ? 'NEEDS_REVISION' : state === 'SHARE_CONFIG' ? 'SHARE_CONFIG' : state === 'APPROVED' ? 'APPROVED' : state === 'DISTRIBUTING' ? 'DISTRIBUTING' : 'LIVE';
@@ -293,14 +307,38 @@ async function main() {
   for (const prefix of ['D', 'PL', 'GD', 'HT', 'JS', 'TX', 'PF']) {
     await prisma.counter.upsert({ where: { id: prefix }, create: { id: prefix, value: 20000 }, update: { value: { set: 20000 } } });
   }
-  console.log('种子数据已写入。客户 client@xinghe.example / 运营 ops@studio.example / 商务 bd@studio.example / 财务 finance@studio.example / 管理员 admin@studio.example ，密码 Demo123456');
+  console.log('种子数据已写入。客户 client@xinghe.example / client-b@weiren.example(未认证) / client-new@example.com(新客户) / 专员 ops@studio.example / 专员乙 ops2@studio.example / 主管 ops-manager@studio.example / 商务 bd@studio.example / 财务 finance@studio.example / 管理员 admin@studio.example ，密码 Demo123456');
 }
 
-async function upsertStaff(email: string, name: string, role: 'OPS' | 'BD' | 'FINANCE' | 'ADMIN', passwordHash: string) {
+async function ensureDemoClients(passwordHash: string) {
+  let clientB = await prisma.company.findFirst({ where: { creditCode: '91330100MA2BBBBB2B' } });
+  if (!clientB) {
+    clientB = await prisma.company.create({
+      data: { name: '未仁文化（客户B）', creditCode: '91330100MA2BBBBB2B', legalPerson: '未仁', contactName: '未仁', contactPhone: '13700003333', certStatus: 'UNVERIFIED' },
+    });
+  }
+  await prisma.user.upsert({
+    where: { email: 'client-b@weiren.example' },
+    create: { email: 'client-b@weiren.example', passwordHash, name: '未仁', role: 'CLIENT', companyId: clientB.id },
+    update: { name: '未仁', companyId: clientB.id },
+  });
+
+  let newbie = await prisma.company.findFirst({ where: { name: '新星短剧（杭州）有限公司' } });
+  if (!newbie) {
+    newbie = await prisma.company.create({ data: { name: '新星短剧（杭州）有限公司', certStatus: 'UNVERIFIED' } });
+  }
+  await prisma.user.upsert({
+    where: { email: 'client-new@example.com' },
+    create: { email: 'client-new@example.com', passwordHash, name: '新客户', role: 'CLIENT', companyId: newbie.id },
+    update: { name: '新客户', companyId: newbie.id },
+  });
+}
+
+async function upsertStaff(email: string, name: string, role: 'OPS' | 'OPS_MANAGER' | 'BD' | 'FINANCE' | 'ADMIN', passwordHash: string) {
   return prisma.user.upsert({
     where: { email },
     create: { email, name, role, passwordHash },
-    update: { name, role, passwordHash },
+    update: { name, role },
   });
 }
 

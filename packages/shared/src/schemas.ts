@@ -293,7 +293,7 @@ export const userCreateSchema = z.object({
 
 export const userPatchSchema = z.object({
   name: z.string().trim().min(1).max(40).optional(),
-  role: z.enum(['OPS', 'BD', 'FINANCE', 'ADMIN']).optional(),
+  role: z.enum(['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN']).optional(),
   disabled: z.boolean().optional(),
 });
 

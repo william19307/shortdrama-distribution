@@ -10,6 +10,7 @@ datasource db {
 enum Role {
   CLIENT
   OPS
+  OPS_MANAGER
   BD
   FINANCE
   ADMIN
@@ -149,6 +150,12 @@ enum CycleType {
   MONTH
   QUARTER
   CUSTOM_DAYS
+}
+
+enum AssetReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum AssetType {
@@ -334,18 +341,23 @@ model Episode {
 }
 
 model Asset {
-  id        String    @id @default(cuid())
-  companyId String
-  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  dramaId   String?
-  drama     Drama?    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
-  type      AssetType
-  name      String
-  fileKey   String
-  createdAt DateTime  @default(now())
+  id           String            @id @default(cuid())
+  companyId    String
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dramaId      String?
+  drama        Drama?            @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  type         AssetType
+  name         String
+  fileKey      String
+  reviewStatus AssetReviewStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt   DateTime?
+  rejectReason String?
+  createdAt    DateTime          @default(now())
 
   @@index([companyId, type])
   @@index([dramaId, type])
+  @@index([reviewStatus])
 }
 
 model UploadSession {

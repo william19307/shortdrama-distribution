@@ -1,0 +1,2 @@
+-- 运营主管。走查与权限使用 OPS_MANAGER。
+ALTER TYPE "Role" ADD VALUE 'OPS_MANAGER';
