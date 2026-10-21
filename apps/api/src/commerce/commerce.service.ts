@@ -1,6 +1,6 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma, SettlementStatus } from '@prisma/client';
-import { SETTLEMENT_LABEL } from '@shortform/shared';
+import { CONTRACT_LABEL, SETTLEMENT_LABEL } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
 import { AuditService } from '../core/audit.service';
@@ -23,6 +23,13 @@ import {
 } from '@shortform/shared';
 
 const OPEN_FOR_WITHDRAW: SettlementStatus[] = ['PENDING_APPLY', 'BELOW_MINIMUM'];
+const CONTRACT_NEXT: Record<string, string[]> = {
+  APPLYING: ['DRAFTING'],
+  DRAFTING: ['PENDING_SIGN'],
+  PENDING_SIGN: ['EFFECTIVE', 'DRAFTING'],
+  EFFECTIVE: ['EXPIRED'],
+  EXPIRED: [],
+};
 
 @Injectable()
 export class CommerceService {
@@ -78,10 +85,17 @@ export class CommerceService {
     assertRole(user, ['OPS', 'BD', 'ADMIN', 'FINANCE']);
     const contract = assertFound(await this.prisma.contract.findUnique({ where: { id }, include: { company: true } }));
     if (user.role === 'OPS') assertCompanyAccess(user, contract.company);
-    return this.prisma.contract.update({
-      where: { id },
+    if (input.status && input.status !== contract.status && !CONTRACT_NEXT[contract.status]?.includes(input.status)) {
+      const from = CONTRACT_LABEL[contract.status] || contract.status;
+      const to = CONTRACT_LABEL[input.status] || input.status;
+      throw new BadRequestException(`合同不能从「${from}」直接改为「${to}」`);
+    }
+    const updated = await this.prisma.contract.updateMany({
+      where: { id, status: contract.status },
       data: { status: input.status, fileKey: input.fileKey, note: input.note },
     });
+    if (updated.count !== 1) throw new ConflictException('合同状态已变化，请刷新');
+    return this.prisma.contract.findUnique({ where: { id }, include: { company: true, dramas: { include: { drama: true } } } });
   }
 
   async getPolicy(user: AuthUser, companyId: string) {
