@@ -67,47 +67,41 @@ export function CompanyPage() {
         </div>
       ) : (
         <Form form={form} layout="vertical" style={{ maxWidth: 640 }} initialValues={company || undefined}>
-          {step === 0 ? (
-            <>
-              <Upload.Dragger multiple={false} showUploadList={false} beforeUpload={async (file) => {
-                try {
-                  const uploaded = await uploadFile(file, 'LICENSE', { companyId: company?.id });
-                  setLicenseKey(uploaded.key);
-                  message.success('营业执照已上传');
-                } catch (err) { message.error(err instanceof Error ? err.message : '没有上传'); }
-                return false;
-              }}>
-                <p>把营业执照拖到这里，或点击上传</p>
-                {licenseKey || company?.licenseKey ? <p>已上传</p> : null}
-              </Upload.Dragger>
-              <Form.Item name="name" label="企业名称" rules={[{ required: true, min: 2 }]} style={{ marginTop: 16 }}><Input /></Form.Item>
-              <Form.Item name="creditCode" label="统一社会信用代码" rules={[{ required: true, len: 18 }]}><Input /></Form.Item>
-              <Button type="primary" onClick={() => setStep(1)}>下一步</Button>
-            </>
-          ) : null}
-          {step === 1 ? (
-            <>
-              <Form.Item name="legalPerson" label="法人" rules={[{ required: true }]}><Input /></Form.Item>
-              <Form.Item name="contactName" label="联系人" rules={[{ required: true }]}><Input /></Form.Item>
-              <Form.Item name="contactPhone" label="联系电话" rules={[{ required: true }]}><Input /></Form.Item>
-              <Space>
-                <Button onClick={() => setStep(0)}>上一步</Button>
-                <Button type="primary" onClick={() => setStep(2)}>下一步</Button>
-              </Space>
-            </>
-          ) : null}
-          {step === 2 ? (
-            <>
-              <Form.Item name="accountName" label="户名"><Input /></Form.Item>
-              <Form.Item name="bankName" label="开户银行"><Input /></Form.Item>
-              <Form.Item name="accountNo" label="账号"><Input /></Form.Item>
-              <Space>
-                <Button onClick={() => setStep(1)}>上一步</Button>
-                <Button onClick={() => submit(true).catch((err) => message.error(err instanceof Error ? err.message : '没有提交'))}>稍后填写</Button>
-                <Button type="primary" onClick={() => submit(false).catch((err) => message.error(err instanceof Error ? err.message : '没有提交'))}>提交</Button>
-              </Space>
-            </>
-          ) : null}
+          <div style={{ display: step === 0 ? 'block' : 'none' }}>
+            <Upload.Dragger multiple={false} showUploadList={false} beforeUpload={async (file) => {
+              try {
+                const uploaded = await uploadFile(file, 'LICENSE', { companyId: company?.id });
+                setLicenseKey(uploaded.key);
+                message.success('营业执照已上传');
+              } catch (err) { message.error(err instanceof Error ? err.message : '没有上传'); }
+              return false;
+            }}>
+              <p>把营业执照拖到这里，或点击上传</p>
+              {licenseKey || company?.licenseKey ? <p>已上传</p> : null}
+            </Upload.Dragger>
+            <Form.Item name="name" label="企业名称" rules={[{ required: true, min: 2 }]} style={{ marginTop: 16 }}><Input /></Form.Item>
+            <Form.Item name="creditCode" label="统一社会信用代码" rules={[{ required: true, len: 18 }]}><Input /></Form.Item>
+            <Button type="primary" onClick={() => form.validateFields(['name', 'creditCode']).then(() => setStep(1)).catch(() => undefined)}>下一步</Button>
+          </div>
+          <div style={{ display: step === 1 ? 'block' : 'none' }}>
+            <Form.Item name="legalPerson" label="法人" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="contactName" label="联系人" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="contactPhone" label="联系电话" rules={[{ required: true }]}><Input /></Form.Item>
+            <Space>
+              <Button onClick={() => setStep(0)}>上一步</Button>
+              <Button type="primary" onClick={() => form.validateFields(['legalPerson', 'contactName', 'contactPhone']).then(() => setStep(2)).catch(() => undefined)}>下一步</Button>
+            </Space>
+          </div>
+          <div style={{ display: step === 2 ? 'block' : 'none' }}>
+            <Form.Item name="accountName" label="户名"><Input /></Form.Item>
+            <Form.Item name="bankName" label="开户银行"><Input /></Form.Item>
+            <Form.Item name="accountNo" label="账号"><Input /></Form.Item>
+            <Space>
+              <Button onClick={() => setStep(1)}>上一步</Button>
+              <Button onClick={() => submit(true).catch((err) => message.error(err instanceof Error ? err.message : '没有提交'))}>稍后填写</Button>
+              <Button type="primary" onClick={() => submit(false).catch((err) => message.error(err instanceof Error ? err.message : '没有提交'))}>提交</Button>
+            </Space>
+          </div>
         </Form>
       )}
       <h2 style={{ marginTop: 28 }}>收款账户</h2>
