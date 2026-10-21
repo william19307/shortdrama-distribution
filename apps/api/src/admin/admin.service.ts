@@ -7,6 +7,7 @@ import { assertFound } from '../core/access';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { SettingsService } from '../core/settings.service';
 
 @Injectable()
@@ -15,6 +16,7 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async workbench(user: AuthUser) {
@@ -139,6 +141,14 @@ export class AdminService {
         ? await this.prisma.platformRosterRequest.update({ where: { id: existing.id }, data: payload })
         : await this.prisma.platformRosterRequest.create({ data: { platformId: id, ...payload } });
       await this.audit.write(user.id, 'platform.roster.request', 'PlatformRosterRequest', request.id, { platformId: id, firstBatch: payload.firstBatch, enabled: payload.enabled });
+      const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
+      await this.notifications.pushMany(managers.map((item) => item.id), {
+        type: 'CF01_CONFIRM',
+        title: '首批平台变更待确认',
+        body: `${user.name} 提交了首批名单变更，请确认。`,
+        entityType: 'PlatformRosterRequest',
+        entityId: request.id,
+      });
       const updated = Object.keys(data).length ? await this.prisma.platform.update({ where: { id }, data }) : platform;
       return { ...updated, pendingConfirmation: true, request };
     }
@@ -166,6 +176,7 @@ export class AdminService {
       '确认单不存在',
     );
     if (request.status !== 'PENDING') throw new BadRequestException('这条变更已经处理过');
+    if (request.requestedById === user.id) throw new ForbiddenException('不能确认自己提交的申请');
     const enabled = request.enabled ?? request.platform.enabled;
     const firstBatch = request.firstBatch ?? request.platform.firstBatch;
     if (request.platform.firstBatch && request.platform.enabled && !(enabled && firstBatch)) {
@@ -177,6 +188,34 @@ export class AdminService {
       this.prisma.platformRosterRequest.update({ where: { id: request.id }, data: { status: 'APPROVED', decidedById: user.id, decidedAt: new Date() } }),
     ]);
     await this.audit.write(user.id, 'platform.roster.confirm', 'Platform', request.platformId, { requestId, enabled, firstBatch });
+    await this.notifications.pushMany([request.requestedById], {
+      type: 'CF01_RESULT',
+      title: '首批平台变更已确认',
+      body: '运营主管已确认名单变更。',
+      entityType: 'PlatformRosterRequest',
+      entityId: request.id,
+    });
+    return updated;
+  }
+
+  async rejectRoster(user: AuthUser, requestId: string, note?: string) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '首发名单由运营主管确认');
+    const request = assertFound(await this.prisma.platformRosterRequest.findUnique({ where: { id: requestId } }), '确认单不存在');
+    if (request.status !== 'PENDING') throw new BadRequestException('这条变更已经处理过');
+    if (request.requestedById === user.id) throw new ForbiddenException('不能确认自己提交的申请');
+    const updated = await this.prisma.platformRosterRequest.update({
+      where: { id: request.id },
+      data: { status: 'REJECTED', decidedById: user.id, decidedAt: new Date(), decisionNote: note ?? '' },
+    });
+    await this.audit.write(user.id, 'platform.roster.reject', 'Platform', request.platformId, { requestId, note });
+    await this.notifications.pushMany([request.requestedById], {
+      type: 'CF01_RESULT',
+      title: '首批平台变更被驳回',
+      body: note || '运营主管驳回了这次名单变更，平台保持原样。',
+      entityType: 'PlatformRosterRequest',
+      entityId: request.id,
+    });
     return updated;
   }
 

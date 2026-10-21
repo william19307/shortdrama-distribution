@@ -151,7 +151,7 @@ export function SettlementsPage() {
           return false;
         }}><Button disabled={viewOnly}>导入应结 Excel</Button></Upload>
         {amountBatch ? <Button type="primary" disabled={viewOnly} onClick={async () => {
-          try { setAmountBatch(await api(`/settlements/amount-import/${amountBatch.id}/confirm`, { method: 'POST' })); message.success('已按预览写入'); load(); }
+          try { setAmountBatch(await api(`/settlements/amount-import/${amountBatch.id}/confirm`, { method: 'POST' })); message.success('已按预览整批写入，结果在任务中心'); load(); }
           catch (err) { message.error(err instanceof Error ? err.message : '没有确认'); }
         }}>确认导入</Button> : null}
       </Space> : null}

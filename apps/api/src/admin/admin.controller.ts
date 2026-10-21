@@ -66,6 +66,11 @@ export class AdminController {
     return this.admin.confirmRoster(user, id);
   }
 
+  @Post('platforms/roster-requests/:id/reject')
+  rejectRoster(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(z.object({ note: z.string().max(200).optional() }))) body: { note?: string }) {
+    return this.admin.rejectRoster(user, id, body.note);
+  }
+
   @Get('audit-logs')
   logs(@CurrentUser() user: AuthUser, @Query(new ZodPipe(logQuery)) query: z.infer<typeof logQuery>) {
     return this.admin.logs(user, query);

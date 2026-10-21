@@ -145,25 +145,28 @@ describe('分派、全审、结算周期与首批名单', () => {
     expect(assigned.status).toBeLessThan(300);
     expect(assigned.body.assigneeId).toBe(opsB);
     expect(assigned.body.slaDueAt).toBeTruthy();
-
-    const unsamped = await prisma.episode.count({ where: { dramaId: second.id, reviewStatus: 'UNSAMPLED' } });
-    expect(unsamped).toBeGreaterThan(0);
   });
 
-  it('RV-04 新客户首部剧全审，预检失败不算首部', async () => {
+  it('RV-04 新客户前 3 部剧全审，预检失败不算', async () => {
     const freshCompany = await prisma.company.create({ data: { name: `全新${stamp}`, ownerId: opsA, certStatus: 'APPROVED' } });
     const passwordHash = hashSync(PASS, 4);
     const email = `rule-fresh-${stamp}@example.com`;
     await prisma.user.create({ data: { email, name: '全新客户', role: 'CLIENT', passwordHash, companyId: freshCompany.id } });
     const failedDrama = await prisma.drama.create({ data: { code: `FAIL${stamp}`, companyId: freshCompany.id, title: '失败占位', nameNorm: `fail${stamp}`, language: '英语' } });
     await prisma.distributionPlan.create({ data: { code: `PF${stamp}`, dramaId: failedDrama.id, companyId: freshCompany.id, round: 'FIRST', status: 'PRECHECK_FAILED' } });
-    const drama = await makeDrama(freshCompany.id, `全审${stamp}`, 10);
     const session = await login(email);
-    const plan = await authed(session.token).post('/api/plans').send({ dramaId: drama.id, round: 'FIRST' });
-    expect(plan.status).toBeLessThan(300);
-    const episodes = await prisma.episode.findMany({ where: { dramaId: drama.id } });
-    expect(episodes).toHaveLength(10);
-    expect(episodes.every((episode) => episode.reviewStatus === 'PENDING')).toBe(true);
+    for (const title of ['全审甲', '全审乙', '全审丙']) {
+      const drama = await makeDrama(freshCompany.id, `${title}${stamp}`, 10);
+      const plan = await authed(session.token).post('/api/plans').send({ dramaId: drama.id, round: 'FIRST' });
+      expect(plan.status).toBeLessThan(300);
+      const episodes = await prisma.episode.findMany({ where: { dramaId: drama.id } });
+      expect(episodes.every((episode) => episode.reviewStatus === 'PENDING')).toBe(true);
+    }
+    const fourth = await makeDrama(freshCompany.id, `抽检${stamp}`, 10);
+    const sampled = await authed(session.token).post('/api/plans').send({ dramaId: fourth.id, round: 'FIRST' });
+    expect(sampled.status).toBeLessThan(300);
+    const unsampled = await prisma.episode.count({ where: { dramaId: fourth.id, reviewStatus: 'UNSAMPLED' } });
+    expect(unsampled).toBeGreaterThan(0);
   });
 
   it('ST-01 结算周期按版本保存，不改已有结算单', async () => {
@@ -185,6 +188,9 @@ describe('分派、全审、结算周期与首批名单', () => {
     expect(companyVersions.map((item) => item.version).sort()).toEqual([1, 2]);
     const kept = await prisma.settlement.findUnique({ where: { id: settlement.id } });
     expect(kept?.amountCny?.toFixed(2)).toBe('88.50');
+    expect(kept?.policyVersionId).toBeNull();
+    const version = await prisma.settlementPolicyVersion.findFirst({ where: { companyId: ownedCompany }, orderBy: { version: 'desc' } });
+    expect(version?.effectiveFrom).toBeTruthy();
   });
 
   it('ST-03 三位小数和缺备注被拒绝，0 可以提交', async () => {
@@ -245,5 +251,27 @@ describe('分派、全审、结算周期与首批名单', () => {
       where: { OR: [{ entityId: extra.id }, { entityId: asked.body.request.id }], action: { in: ['platform.update', 'platform.roster.request', 'platform.roster.confirm', 'platform.sync-lag.apply'] } },
     });
     expect(audits).toBeGreaterThan(0);
+
+    const own = await prisma.platformRosterRequest.create({ data: { platformId: extra.id, firstBatch: false, requestedById: (await prisma.user.findUniqueOrThrow({ where: { email: managerEmail } })).id } });
+    const self = await authed(manager).post(`/api/platforms/roster-requests/${own.id}/confirm`);
+    expect(self.status).toBe(403);
+    const rejected = await authed(manager).post(`/api/platforms/roster-requests/${asked.body.request.id}/reject`).send({ note: '保持现状' });
+    expect(rejected.status).toBe(400);
+  });
+
+  it('RV-12 同一工单同一档位只提醒一次', async () => {
+    const drama = await prisma.drama.create({ data: { code: `SLA${stamp}`.slice(0, 24), companyId: ownedCompany, title: '超时剧', nameNorm: `sla${stamp}`, language: '英语' } });
+    const due = new Date(Date.now() - 24 * 3600 * 1000);
+    const plan = await prisma.distributionPlan.create({
+      data: { code: `SL${stamp}`.slice(0, 24), dramaId: drama.id, companyId: ownedCompany, round: 'FIRST', status: 'IN_REVIEW', assigneeId: opsA, submittedAt: new Date(Date.now() - 3 * 24 * 3600 * 1000), slaDueAt: due },
+    });
+    const first = await authed(manager).post('/api/admin/jobs/review-sla/run');
+    expect(first.status).toBeLessThan(300);
+    const once = await prisma.notification.count({ where: { entityId: { contains: plan.id } } });
+    expect(once).toBeGreaterThan(0);
+    const second = await authed(manager).post('/api/admin/jobs/review-sla/run');
+    expect(second.body.deduped).toBeGreaterThan(0);
+    const twice = await prisma.notification.count({ where: { entityId: { contains: plan.id } } });
+    expect(twice).toBe(once);
   });
 });

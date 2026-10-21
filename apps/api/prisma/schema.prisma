@@ -467,6 +467,8 @@ model ShareConfig {
   submittedById       String?
   reviewedById        String?
   reviewNote          String?
+  templateId          String?
+  templateVersion     Int?
   updatedAt           DateTime          @updatedAt
 
   @@unique([planId, platformId])
@@ -670,6 +672,7 @@ model Settlement {
   deviationPct Decimal?         @db.Decimal(8, 2)
   withdrawalId String?
   withdrawal   Withdrawal?      @relation(fields: [withdrawalId], references: [id])
+  policyVersionId String?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
 
@@ -788,11 +791,23 @@ model AsyncTask {
   skipped    Int       @default(0)
   items      Json?
   cancelRequested Boolean @default(false)
+  parentId   String?
+  idempotencyKey String?
   result     Json?
   createdAt  DateTime  @default(now())
   finishedAt DateTime?
 
   @@index([ownerId, createdAt(sort: Desc)])
+}
+
+model SlaAlert {
+  id        String   @id @default(cuid())
+  planId    String
+  tier      String
+  dueAt     DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([planId, tier, dueAt])
 }
 
 model IdempotencyKey {
@@ -963,6 +978,7 @@ model PlatformRosterRequest {
   status        String    @default("PENDING")
   requestedById String
   decidedById   String?
+  decisionNote  String    @default("")
   createdAt     DateTime  @default(now())
   decidedAt     DateTime?
 
@@ -977,6 +993,7 @@ model SettlementPolicyVersion {
   cycleType     CycleType
   customDays    Int?
   anchorDate    DateTime  @db.Date
+  effectiveFrom DateTime  @default(now()) @db.Date
   note          String    @default("")
   carryoverNote String    @default("")
   createdById   String

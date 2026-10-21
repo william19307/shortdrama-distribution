@@ -135,6 +135,7 @@ function PolicyForm({ companyId }: { companyId: string }) {
       <Form.Item name="cycleType" initialValue="MONTH" label="结算周期"><Select style={{ width: 140 }} options={[{ value: 'MONTH', label: '自然月' }, { value: 'QUARTER', label: '季度' }, { value: 'CUSTOM_DAYS', label: '自定义天数' }]} /></Form.Item>
       <Form.Item name="customDays"><InputNumber placeholder="天数" min={1} /></Form.Item>
       <Form.Item name="anchorDate" rules={[{ required: true }]}><Input placeholder="锚点 YYYY-MM-DD" /></Form.Item>
+      <Form.Item name="effectiveDate"><Input placeholder="生效日，默认今天" /></Form.Item>
       <Form.Item name="note"><Input placeholder="说明" /></Form.Item>
       <Button htmlType="submit">保存周期</Button>
       {latest ? <span style={{ color: 'var(--ds-text-3)', lineHeight: '32px' }}>当前 v{latest.version}{latest.planId ? '（项目）' : ''}，共 {versions.length} 个版本</span> : null}
@@ -174,14 +175,14 @@ export function ReviewsPage() {
 
   return (
     <div>
-      <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。主管可以把待审单分派给专员。" />
+      <PageHead title="审核队列" hint="新客户前 3 部剧全审。之后默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。批量通过的结果记在任务中心。" />
       <ErrorNote error={error} />
       {picked.length ? <Space wrap style={{ marginBottom: 12 }}>
         <b>已选 {picked.length}</b>
         <Button type="primary" disabled={viewOnly} onClick={async () => {
           try {
             const res = await api<{ passed: { code: string }[]; skipped: { code: string; reason: string }[] }>('/reviews/batch-pass', { method: 'POST', json: { planIds: picked } });
-            setBatchNote(`通过 ${res.passed.length} 部。${res.skipped.map((item) => `${item.code || '工单'}：${item.reason}`).join('；')}`);
+            setBatchNote(`通过 ${res.passed.length} 部。${res.skipped.map((item) => `${item.code || '工单'}：${item.reason}`).join('；')} 已记入任务中心。`);
             setPicked([]);
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); }
@@ -304,7 +305,7 @@ export function SharesPage() {
             const body = new FormData();
             body.append('file', file);
             const res = await api<{ applied: number; failed: number; rows: { rowNo: number; error: string }[] }>('/listings/import', { method: 'POST', body });
-            message.success(`已录入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}`);
+            message.success(`已录入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}，已记入任务中心`);
             if (res.failed) setError(res.rows.filter((row) => row.error).map((row) => `第 ${row.rowNo} 行 ${row.error}`).join('；'));
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有导入'); }
@@ -335,7 +336,7 @@ export function SharesPage() {
       <Modal title="分成差异" open={Boolean(preview)} onCancel={() => setPreview(null)} okText="提交套用" onOk={async () => {
         if (!preview) return;
         const res = await api<{ appliedCount: number; summary: { skip: number } }>(`/share-templates/${preview.templateId}/apply`, { method: 'POST', json: { planIds: picked } });
-        message.success(`已套用 ${res.appliedCount} 部，跳过 ${res.summary.skip} 部，进入分成待复核`);
+        message.success(`已套用 ${res.appliedCount} 部，跳过 ${res.summary.skip} 部，进入分成待复核。已记入任务中心`);
         setPreview(null);
         setPicked([]);
         load();
@@ -606,7 +607,7 @@ export function PlatformsPage() {
         { title: '地区', dataIndex: 'region' },
         { title: '数据日', dataIndex: 'syncLag', render: (value, row) => <Space>{canEditLag ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); message.success('数据日次日生效'); load(); }} /> : labelOf(value)}{row.syncLagPending ? <Tag>{labelOf(row.syncLagPending)} 次日生效</Tag> : null}</Space> },
         { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={viewOnly || (Boolean(row.firstBatch) && !canRequestRoster)} onChange={async (enabled) => { try { const res = await api<any>(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); if (res.pendingConfirmation) message.success('已提交主管确认'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
-        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Space><Switch checked={value} disabled={!canRequestRoster} onChange={async (firstBatch) => { try { const res = await api<any>(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); if (res.pendingConfirmation) message.success('已提交主管确认，名单尚未变更'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} />{rosterHint(row) ? <Tag color="gold">待确认：{rosterHint(row)}</Tag> : null}{canConfirmFirst && row.rosterRequests?.[0] ? <Button size="small" onClick={async () => { await api(`/platforms/roster-requests/${row.rosterRequests[0].id}/confirm`, { method: 'POST' }); message.success('已确认'); load(); }}>确认</Button> : null}</Space> },
+        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Space><Switch checked={value} disabled={!canRequestRoster} onChange={async (firstBatch) => { try { const res = await api<any>(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); if (res.pendingConfirmation) message.success('已提交主管确认，名单尚未变更'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} />{rosterHint(row) ? <Tag color="gold">待确认：{rosterHint(row)}</Tag> : null}{canConfirmFirst && row.rosterRequests?.[0] ? <><Button size="small" onClick={async () => { await api(`/platforms/roster-requests/${row.rosterRequests[0].id}/confirm`, { method: 'POST' }); message.success('已确认'); load(); }}>确认</Button><Button size="small" onClick={async () => { await api(`/platforms/roster-requests/${row.rosterRequests[0].id}/reject`, { method: 'POST', json: { note: '名单保持不变' } }); message.success('已驳回'); load(); }}>驳回</Button></> : null}</Space> },
       ]} />
       <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api('/platforms', { method: 'POST', json: values }); message.success('已添加'); load(); }}>
         <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="新平台名称" /></Form.Item>
@@ -687,7 +688,7 @@ export function TasksPage() {
   useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="任务中心" hint="客户只看自己的任务。主管可以看团队任务。失败项可以单独重试，取消只停掉还没做的项。" />
+      <PageHead title="任务中心" hint="批量通过、分成套用、批量申请、上架导入和应结导入都会记在这里。客户只看自己的任务，主管可以看团队任务。失败项可以单独重试，取消只停掉还没做的项。" />
       <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
         { title: '名称', dataIndex: 'name' },
         { title: '进度', dataIndex: 'progress', render: (value: number) => `${value || 0}%` },

@@ -207,62 +207,64 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     const now = Date.now();
     const open = await this.prisma.distributionPlan.findMany({
       where: { status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] }, slaDueAt: { not: null } },
-      select: { id: true, code: true, slaDueAt: true, submittedAt: true },
+      select: { id: true, code: true, slaDueAt: true, submittedAt: true, assigneeId: true },
     });
     const buckets = { warn80: [] as string[], overdue: [] as string[], double: [] as string[] };
+    const due: { id: string; code: string; assigneeId: string | null; tier: 'warn80' | 'overdue' | 'double'; slaDueAt: Date }[] = [];
     for (const plan of open) {
       if (!plan.slaDueAt || !plan.submittedAt) continue;
       const span = Math.max(plan.slaDueAt.getTime() - plan.submittedAt.getTime(), 1);
       const used = (now - plan.submittedAt.getTime()) / span;
-      if (used >= this.schedule.slaDoubleRatio) buckets.double.push(plan.code);
-      else if (now >= plan.slaDueAt.getTime()) buckets.overdue.push(plan.code);
-      else if (used >= this.schedule.slaWarnRatio) buckets.warn80.push(plan.code);
+      const tier = used >= this.schedule.slaDoubleRatio ? 'double' : now >= plan.slaDueAt.getTime() ? 'overdue' : used >= this.schedule.slaWarnRatio ? 'warn80' : null;
+      if (!tier) continue;
+      buckets[tier].push(plan.code);
+      due.push({ id: plan.id, code: plan.code, assigneeId: plan.assigneeId, tier, slaDueAt: plan.slaDueAt });
     }
-    const message = `[RV-12] SLA 巡检：80%预警 ${buckets.warn80.length}、超时 ${buckets.overdue.length}、2倍 ${buckets.double.length}`;
     const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
+    const admins = await this.prisma.user.findMany({ where: { role: 'ADMIN', disabled: false }, select: { id: true } });
     const managerIds = managers.map((row) => row.id);
-    const slot = this.halfHourSlot();
-    const plans = await this.prisma.distributionPlan.findMany({
-      where: { code: { in: [...buckets.warn80, ...buckets.overdue, ...buckets.double] } },
-      select: { id: true, code: true, assigneeId: true },
-    });
-    const byCode = new Map(plans.map((plan) => [plan.code, plan]));
-    for (const code of buckets.warn80) {
-      const plan = byCode.get(code);
-      if (!plan) continue;
-      await this.notifications.pushMany(plan.assigneeId ? [plan.assigneeId] : managerIds, {
-        type: 'RV12_WARN80',
-        title: `[RV-12] SLA 已用 80%：${code}`,
-        body: '审核即将超时，请尽快处理。',
-        entityType: 'DistributionPlan',
-        entityId: `${plan.id}:warn80:${slot}`,
+    const adminIds = admins.map((row) => row.id);
+    let deduped = 0;
+    for (const plan of due) {
+      const claimed = await this.prisma.slaAlert.createMany({
+        data: [{ planId: plan.id, tier: plan.tier, dueAt: plan.slaDueAt }],
+        skipDuplicates: true,
       });
+      if (!claimed.count) {
+        deduped += 1;
+        continue;
+      }
+      const entityId = `${plan.id}:${plan.tier}:${plan.slaDueAt.toISOString()}`;
+      if (plan.tier === 'warn80') {
+        await this.notifications.pushMany(plan.assigneeId ? [plan.assigneeId] : managerIds, {
+          type: 'RV12_WARN80',
+          title: `[RV-12] SLA 已用 80%：${plan.code}`,
+          body: '审核即将超时，请尽快处理。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      } else if (plan.tier === 'overdue') {
+        await this.notifications.pushMany([...(plan.assigneeId ? [plan.assigneeId] : []), ...managerIds], {
+          type: 'RV12_OVERDUE',
+          title: `[RV-12] SLA 已超时：${plan.code}`,
+          body: '审核已超时，已通知运营主管。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      } else {
+        await this.notifications.pushMany([...managerIds, ...adminIds], {
+          type: 'RV12_DOUBLE',
+          title: `[RV-12] SLA 2倍超时：${plan.code}`,
+          body: '审核严重超时，请改派或介入。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      }
     }
-    for (const code of buckets.overdue) {
-      const plan = byCode.get(code);
-      if (!plan) continue;
-      await this.notifications.pushMany([...(plan.assigneeId ? [plan.assigneeId] : []), ...managerIds], {
-        type: 'RV12_OVERDUE',
-        title: `[RV-12] SLA 已超时：${code}`,
-        body: '审核已超时，已通知运营主管。',
-        entityType: 'DistributionPlan',
-        entityId: `${plan.id}:overdue:${slot}`,
-      });
-    }
-    for (const code of buckets.double) {
-      const plan = byCode.get(code);
-      if (!plan) continue;
-      await this.notifications.pushMany(managerIds, {
-        type: 'RV12_DOUBLE',
-        title: `[RV-12] SLA 2倍超时：${code}`,
-        body: '审核严重超时，请改派或介入。',
-        entityType: 'DistributionPlan',
-        entityId: `${plan.id}:double:${slot}`,
-      });
-    }
+    const message = `[RV-12] SLA 巡检：80%预警 ${buckets.warn80.length}、超时 ${buckets.overdue.length}、2倍 ${buckets.double.length}（已提醒过跳过 ${deduped}）`;
     this.log.log(message);
-    await this.audit.write(null, 'job.review-sla', 'Job', slot, { message, ...buckets });
-    return { job: 'review-sla', ...buckets, message };
+    await this.audit.write(null, 'job.review-sla', 'Job', this.halfHourSlot(), { message, ...buckets, deduped });
+    return { job: 'review-sla', ...buckets, deduped, message };
   }
 
   async settlementGenerate() {
@@ -270,7 +272,11 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     const created: string[] = [];
     const skipped: string[] = [];
     for (const policy of policies) {
-      const period = this.previousPeriod(policy.cycleType, policy.customDays);
+      const version = await this.prisma.settlementPolicyVersion.findFirst({
+        where: { companyId: policy.companyId, planId: null, effectiveFrom: { lte: new Date() } },
+        orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+      });
+      const period = this.previousPeriod(version?.cycleType ?? policy.cycleType, version ? version.customDays : policy.customDays);
       if (!period) {
         skipped.push(policy.companyId);
         continue;
@@ -292,6 +298,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
             periodEnd: period.end,
             status: 'PENDING_ENTRY',
             referenceCny: new Prisma.Decimal(0),
+            policyVersionId: version?.id ?? null,
           },
         });
         if (admin) {

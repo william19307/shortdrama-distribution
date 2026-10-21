@@ -177,7 +177,7 @@ export function LibraryPage() {
           {client ? <Button type="primary" onClick={async () => {
             try {
               const res = await api<{ submittedCount: number; needsActionCount: number; needsAction: { title: string; reason: string }[] }>('/plans/batch', { method: 'POST', json: { dramaIds: selected, round: 'FIRST' } });
-              setNotice(`已提交 ${res.submittedCount} 部，${res.needsActionCount} 部需处理${res.needsAction[0] ? `：${res.needsAction[0].reason}` : ''}`);
+              setNotice(`已提交 ${res.submittedCount} 部，${res.needsActionCount} 部需处理${res.needsAction[0] ? `：${res.needsAction[0].reason}` : ''}。已记入任务中心`);
             } catch (err) { setError(err instanceof Error ? err.message : '没有提交'); }
           }}>申请发行</Button> : null}
           <Button onClick={async () => { const tag = window.prompt('标签') || ''; if (!tag) return; await api('/dramas/batch', { method: 'POST', json: { ids: selected, tag } }); setNotice('已打标签'); }}>打标签</Button>

@@ -19,6 +19,7 @@ import { moneyDecimal } from '../core/money';
 import { jobScheduleFromEnv } from '../jobs/jobs.service';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
+import { recordFinishedTask } from '../core/task-log';
 
 const REVIEW_LOAD_CAP = 30;
 const OPEN_REVIEW_STATUSES = ['PENDING_REVIEW', 'IN_REVIEW'] as const;
@@ -71,10 +72,12 @@ export class DistributionService {
 
       const allApproved = readyEpisodes.length > 0 && readyEpisodes.every((episode) => episode.reviewStatus === 'APPROVED');
       const skipReview = input.round === 'SECOND' && allApproved;
-      const priorDramas = await tx.distributionPlan.count({
-        where: { companyId: drama.companyId, status: { not: 'PRECHECK_FAILED' } },
+      const priorDramas = await tx.distributionPlan.findMany({
+        where: { companyId: drama.companyId, status: { notIn: ['PRECHECK_FAILED', 'WITHDRAWN'] } },
+        select: { dramaId: true },
+        distinct: ['dramaId'],
       });
-      const fullReview = priorDramas === 0;
+      const fullReview = priorDramas.length < 3;
       const assigneeId = skipReview ? drama.company.ownerId : await this.pickAssignee(tx, drama.company);
       const status: 'SHARE_CONFIG' | 'PENDING_REVIEW' | 'PENDING_ASSIGN' = skipReview ? 'SHARE_CONFIG' : assigneeId ? 'PENDING_REVIEW' : 'PENDING_ASSIGN';
       if (!skipReview) {
@@ -129,7 +132,15 @@ export class DistributionService {
         needsAction.push({ dramaId, title: '', reason: error.message, href: `/dramas/${dramaId}` });
       }
     }
-    return { submittedCount: submitted.length, needsActionCount: needsAction.length, submitted, needsAction };
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'PLAN_BATCH',
+      name: `批量${input.round === 'FIRST' ? '首发' : '二轮'}申请（${input.dramaIds.length} 部）`,
+      succeeded: submitted.length,
+      failed: needsAction.length,
+      skipped: 0,
+      items: needsAction.map((item) => ({ key: item.dramaId, status: 'FAILED', message: item.reason })),
+    });
+    return { submittedCount: submitted.length, needsActionCount: needsAction.length, submitted, needsAction, task: { id: task.id, name: task.name } };
   }
 
   async listPlans(user: AuthUser, query: { page: number; pageSize: number; status?: string; companyId?: string }) {
@@ -442,7 +453,18 @@ export class DistributionService {
       await this.audit.write(user.id, 'review.batch_pass', 'DistributionPlan', plan.id);
       passed.push({ id: plan.id, code: plan.code });
     }
-    return { passed, skipped, passedCount: passed.length, skippedCount: skipped.length };
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'REVIEW_BATCH_APPROVE',
+      name: `批量通过（${planIds.length} 部）`,
+      succeeded: passed.length,
+      failed: 0,
+      skipped: skipped.length,
+      items: [
+        ...passed.map((item) => ({ key: item.code, status: 'SUCCESS', message: '' })),
+        ...skipped.map((item) => ({ key: item.code || item.id, status: 'SKIPPED', message: item.reason })),
+      ],
+    });
+    return { passed, skipped, passedCount: passed.length, skippedCount: skipped.length, task: { id: task.id, name: task.name } };
   }
 
   listTemplates() {
@@ -512,6 +534,8 @@ export class DistributionService {
               guaranteePeriodDays: template.guaranteePeriodDays,
               reviewStatus: 'PENDING',
               submittedById: user.id,
+              templateId: template.id,
+              templateVersion: template.version,
             },
             update: {
               mode: template.mode,
@@ -524,6 +548,8 @@ export class DistributionService {
               submittedById: user.id,
               reviewedById: null,
               reviewNote: null,
+              templateId: template.id,
+              templateVersion: template.version,
             },
           });
         }
@@ -532,7 +558,15 @@ export class DistributionService {
       applied.push(plan.id);
     }
     await this.audit.write(user.id, 'share.template.apply', 'ShareTemplate', template.id, { applied: applied.length, skipped: preview.summary.skip });
-    return { ...preview, appliedCount: applied.length, status: 'SHARE_REVIEW' };
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'SHARE_TEMPLATE_APPLY',
+      name: `套用分成模板「${template.name}」v${template.version}`,
+      succeeded: applied.length,
+      failed: 0,
+      skipped: preview.summary.skip,
+      items: preview.items.map((item) => ({ key: item.code || item.planId, status: item.kind === 'SKIP' ? 'SKIPPED' : 'SUCCESS', message: item.reason })),
+    });
+    return { ...preview, appliedCount: applied.length, status: 'SHARE_REVIEW', task: { id: task.id, name: task.name } };
   }
 
   async listingTemplate() {
@@ -594,7 +628,17 @@ export class DistributionService {
       }
     }
     if (!rows.length) throw new BadRequestException('没有读到上架结果');
-    return { rows, applied: rows.filter((row) => row.ok).length, failed: rows.filter((row) => !row.ok).length };
+    const applied = rows.filter((row) => row.ok).length;
+    const failed = rows.filter((row) => !row.ok).length;
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'LISTING_IMPORT',
+      name: `上架结果导入（${rows.length} 行）`,
+      succeeded: applied,
+      failed,
+      skipped: 0,
+      items: rows.map((row) => ({ key: `第 ${row.rowNo} 行`, status: row.ok ? 'SUCCESS' : 'FAILED', message: row.error })),
+    });
+    return { rows, applied, failed, task: { id: task.id, name: task.name } };
   }
 
   private async classifyTemplate(user: AuthUser, planId: string) {

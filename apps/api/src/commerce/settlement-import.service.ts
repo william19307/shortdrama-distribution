@@ -6,6 +6,7 @@ import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, nextCode } from '../core/auth';
 import { MONEY_PATTERN, moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
+import { recordFinishedTask } from '../core/task-log';
 
 const STAFF = ['OPS', 'OPS_MANAGER'] as const;
 
@@ -122,58 +123,62 @@ export class SettlementImportService {
       '导入批次不存在',
     );
     if (batch.status === 'CONFIRMED') throw new BadRequestException('这批已经导入过');
-    for (const row of batch.rows) {
-      if (row.kind !== 'NEW' && row.kind !== 'MODIFY') continue;
-      if (!row.settlementId) continue;
-      try {
-        await this.prisma.$transaction(async (tx) => {
-          const current = assertFound(await tx.settlement.findUnique({ where: { id: row.settlementId! }, include: { lines: true, company: true } }), '结算单不存在');
-          if (user.role === 'OPS') assertCompanyAccess(user, current.company);
-          if (!['PENDING_ENTRY', 'PENDING_REVIEW'].includes(current.status)) throw new BadRequestException('当前状态不能导入金额');
-          const amount = moneyDecimal(row.amountCny);
-          const lineInputs = (row.lines ?? []) as { lineId: string; amount: string }[];
-          if (lineInputs.length) {
-            const sum = lineInputs.reduce((acc, line) => acc.plus(moneyDecimal(line.amount)), new Prisma.Decimal(0));
-            if (!sum.equals(amount)) throw new BadRequestException('明细合计与应结金额不一致');
-            for (const line of lineInputs) {
-              const hit = current.lines.find((item) => item.id === line.lineId);
-              if (!hit) throw new BadRequestException('明细不属于这张结算单');
-              await tx.settlementLine.update({ where: { id: line.lineId }, data: { lineAmountCny: moneyDecimal(line.amount) } });
-            }
+    const writable = batch.rows.filter((row) => (row.kind === 'NEW' || row.kind === 'MODIFY') && row.settlementId);
+    await this.prisma.$transaction(async (tx) => {
+      for (const row of writable) {
+        const current = assertFound(await tx.settlement.findUnique({ where: { id: row.settlementId! }, include: { lines: true, company: true } }), '结算单不存在');
+        if (user.role === 'OPS') assertCompanyAccess(user, current.company);
+        if (!['PENDING_ENTRY', 'PENDING_REVIEW'].includes(current.status)) throw new BadRequestException(`${row.settlementCode} 当前状态不能导入金额`);
+        const amount = moneyDecimal(row.amountCny);
+        const lineInputs = (row.lines ?? []) as { lineId: string; amount: string }[];
+        if (lineInputs.length) {
+          const sum = lineInputs.reduce((acc, line) => acc.plus(moneyDecimal(line.amount)), new Prisma.Decimal(0));
+          if (!sum.equals(amount)) throw new BadRequestException(`${row.settlementCode} 明细合计与应结金额不一致`);
+          for (const line of lineInputs) {
+            const hit = current.lines.find((item) => item.id === line.lineId);
+            if (!hit) throw new BadRequestException('明细不属于这张结算单');
+            await tx.settlementLine.update({ where: { id: line.lineId }, data: { lineAmountCny: moneyDecimal(line.amount) } });
           }
-          await tx.settlement.update({
-            where: { id: current.id },
-            data: {
-              amountCny: amount,
-              internalNote: row.internalNote || current.internalNote,
-              clientNote: row.clientNote,
-              enteredById: user.id,
-              enteredAt: new Date(),
-              status: 'PENDING_REVIEW',
-              reviewedById: null,
-              reviewedAt: null,
-            },
-          });
-          await tx.settlementLog.create({
-            data: {
-              settlementId: current.id,
-              action: row.kind === 'MODIFY' ? 'Excel 修改应结金额' : 'Excel 录入应结金额',
-              actorId: user.id,
-              reason: row.reason,
-              before: { amountCny: current.amountCny?.toFixed(2) ?? null },
-              after: { amountCny: amount.toFixed(2), batch: batch.code },
-            },
-          });
+        }
+        await tx.settlement.update({
+          where: { id: current.id },
+          data: {
+            amountCny: amount,
+            internalNote: row.internalNote || current.internalNote,
+            clientNote: row.clientNote,
+            enteredById: user.id,
+            enteredAt: new Date(),
+            status: 'PENDING_REVIEW',
+            reviewedById: null,
+            reviewedAt: null,
+          },
         });
-        await this.prisma.settlementImportRow.update({ where: { id: row.id }, data: { applied: true } });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : '导入失败';
-        await this.prisma.settlementImportRow.update({ where: { id: row.id }, data: { kind: 'ERROR', errorReason: message, applied: false } });
+        await tx.settlementLog.create({
+          data: {
+            settlementId: current.id,
+            action: row.kind === 'MODIFY' ? 'Excel 修改应结金额' : 'Excel 录入应结金额',
+            actorId: user.id,
+            reason: row.reason,
+            before: { amountCny: current.amountCny?.toFixed(2) ?? null },
+            after: { amountCny: amount.toFixed(2), batch: batch.code },
+          },
+        });
+        await tx.settlementImportRow.update({ where: { id: row.id }, data: { applied: true } });
       }
-    }
-    await this.prisma.settlementImportBatch.update({ where: { id }, data: { status: 'CONFIRMED' } });
-    await this.audit.write(user.id, 'settlement.import.confirm', 'SettlementImportBatch', id, { code: batch.code });
-    return this.present(id);
+      await tx.settlementImportBatch.update({ where: { id }, data: { status: 'CONFIRMED' } });
+    });
+    const unchanged = batch.rows.filter((row) => row.kind === 'UNCHANGED').length;
+    const errors = batch.rows.filter((row) => row.kind === 'ERROR').length;
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'SETTLEMENT_IMPORT',
+      name: `应结金额导入 ${batch.code}`,
+      succeeded: writable.length,
+      failed: errors,
+      skipped: unchanged,
+      items: batch.rows.map((row) => ({ key: row.settlementCode, status: row.kind, message: row.errorReason })),
+    });
+    await this.audit.write(user.id, 'settlement.import.confirm', 'SettlementImportBatch', id, { code: batch.code, taskId: task.id });
+    return { ...(await this.present(id)), task: { id: task.id, name: task.name } };
   }
 
   private async judge(

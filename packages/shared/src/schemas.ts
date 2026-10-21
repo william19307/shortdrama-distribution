@@ -349,6 +349,7 @@ export const policySchema = z.object({
   anchorDate: dateStr,
   note: z.string().max(500).optional(),
   carryoverNote: z.string().max(500).optional(),
+  effectiveDate: dateStr.optional(),
 });
 
 export const withdrawalCreateSchema = z.object({

@@ -1,12 +1,13 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { ContractStatus, Prisma, SettlementStatus } from '@prisma/client';
-import { CONTRACT_LABEL, SETTLEMENT_LABEL } from '@shortform/shared';
+import { CONTRACT_LABEL, SETTLEMENT_LABEL, shanghaiToday } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound, maskAccount } from '../core/access';
 import { hidesCommercialTerms, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { moneyDecimal } from '../core/money';
+import { recordFinishedTask } from '../core/task-log';
 import { PrismaService } from '../core/prisma.service';
 import { SettingsService } from '../core/settings.service';
 import { StorageService } from '../core/storage.service';
@@ -186,8 +187,16 @@ export class CommerceService {
         anchorDate: day(input.anchorDate),
         note: input.note ?? '',
         carryoverNote: input.carryoverNote ?? '',
+        effectiveFrom: day(input.effectiveDate || shanghaiToday()),
         createdById: userId,
       },
+    });
+  }
+
+  private async policyVersionAt(db: Prisma.TransactionClient | PrismaService, companyId: string, at: Date) {
+    return db.settlementPolicyVersion.findFirst({
+      where: { companyId, planId: null, effectiveFrom: { lte: at } },
+      orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
     });
   }
 
@@ -271,6 +280,7 @@ export class CommerceService {
         guaranteeAmount: share?.guaranteeAmount ?? null,
       });
     }
+    const policyVersion = await this.policyVersionAt(this.prisma, company.id, end);
     const created = await this.prisma.$transaction(async (tx) => {
       const settlement = await tx.settlement.create({
         data: {
@@ -280,6 +290,7 @@ export class CommerceService {
           periodEnd: end,
           status: 'PENDING_ENTRY',
           referenceCny: reference,
+          policyVersionId: policyVersion?.id ?? null,
           lines: { create: lines },
         },
       });
