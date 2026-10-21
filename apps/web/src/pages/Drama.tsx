@@ -1,9 +1,10 @@
-import { App, Button, Descriptions, Form, Input, InputNumber, Modal, Select, Space, Table, Tabs, Tag, Upload } from 'antd';
+import { amountColumn } from '@ds/antdTheme';
+import { App, Button, Descriptions, Form, Input, InputNumber, Modal, Progress, Select, Space, Steps, Table, Tabs, Tag, Upload } from 'antd';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { api, uploadFile } from '../api';
 import { useAuth } from '../auth';
-import { EPISODE_CLIENT, ErrorNote, PageHead, PhaseTag, StatusTag, labelOf } from '../ui';
+import { EPISODE_CLIENT, ErrorNote, PageHead, PhaseTag, PlatformChip, StatusTag, labelOf } from '../ui';
 
 interface Platform { id: string; name: string; firstBatch: boolean; enabled: boolean }
 interface Episode { id: string; no: number; fileName: string | null; reviewStatus: string; rejectReason: string | null; fileSize: string | null }
@@ -31,6 +32,7 @@ export function DramaPage() {
   const [error, setError] = useState('');
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [applyOpen, setApplyOpen] = useState(false);
+  const [upload, setUpload] = useState<{ name: string; percent: number; error?: string; retry?: () => void } | null>(null);
   const [round, setRound] = useState<'FIRST' | 'SECOND'>('FIRST');
   const [picked, setPicked] = useState<string[]>([]);
   const [custom, setCustom] = useState('');
@@ -71,14 +73,16 @@ export function DramaPage() {
 
   const first = platforms.filter((item) => item.firstBatch && item.enabled);
   const sendFile = async (file: File, purpose: string, no?: number) => {
-    const hide = message.loading('正在上传…', 0);
+    setUpload({ name: file.name, percent: 0 });
     try {
-      await uploadFile(file, purpose, { dramaId: id, episodeNo: no });
+      await uploadFile(file, purpose, { dramaId: id, episodeNo: no }, { onProgress: (ratio) => setUpload({ name: file.name, percent: Math.round(ratio * 100) }) });
       message.success('已保存');
+      setUpload(null);
       load();
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '上传失败');
-    } finally { hide(); }
+      const text = err instanceof Error ? err.message : '上传失败，可以重试';
+      setUpload({ name: file.name, percent: 0, error: text, retry: () => sendFile(file, purpose, no) });
+    }
   };
 
   const apply = async () => {
@@ -113,18 +117,22 @@ export function DramaPage() {
       <ErrorNote error={error} />
       {drama ? (
         <>
-          <Space align="start" size={20} style={{ marginBottom: 16 }}>
-            <div className="ds-poster" style={{ width: 140 }}>
+          <Space align="start" size={20} style={{ marginBottom: 16, width: '100%' }}>
+            <div className="ds-poster" style={{ width: 160, flex: '0 0 160px' }}>
               {drama.coverUrl ? <img src={drama.coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
-              <div className="ds-poster__art" style={{ background: drama.coverUrl ? 'linear-gradient(transparent,#000)' : 'var(--ds-grad-bento)' }}>
-                <div className="ds-poster__title" style={{ fontSize: 18 }}>{drama.title}</div>
+              <div className="ds-poster__art" style={{ background: drama.coverUrl ? 'var(--ds-grad-bar)' : 'var(--ds-grad-bento)' }}>
+                <div className="ds-poster__title" style={{ fontSize: 'var(--ds-fs-h4)' }}>{drama.title}</div>
               </div>
             </div>
-            <Descriptions column={1} size="small" style={{ flex: 1 }}>
-              <Descriptions.Item label="题材">{drama.genre || '—'}</Descriptions.Item>
-              <Descriptions.Item label="语言">{drama.language}</Descriptions.Item>
-              <Descriptions.Item label="简介">{drama.synopsis || '还没有简介'}</Descriptions.Item>
-            </Descriptions>
+            <div style={{ flex: 1 }}>
+              <h2 style={{ fontSize: 'var(--ds-fs-h2)', letterSpacing: 'var(--ds-ls-h2)', lineHeight: 'var(--ds-lh-h2)', margin: '0 0 12px' }}>{drama.title}</h2>
+              <Steps size="small" current={flowStep(drama)} items={[{ title: '上传' }, { title: '审核' }, { title: '本地化' }, { title: '分发' }, { title: '结算' }]} style={{ marginBottom: 16 }} />
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="题材">{drama.genre || '—'}</Descriptions.Item>
+                <Descriptions.Item label="语言">{drama.language}</Descriptions.Item>
+                <Descriptions.Item label="简介">{drama.synopsis || '还没有简介'}</Descriptions.Item>
+              </Descriptions>
+            </div>
           </Space>
           <Tabs items={[
             {
@@ -140,6 +148,13 @@ export function DramaPage() {
                       </Upload>
                       <Upload showUploadList={false} beforeUpload={(file) => { sendFile(file, 'COVER'); return false; }}><Button>上传封面</Button></Upload>
                     </Space>
+                  ) : null}
+                  {upload ? (
+                    <div style={{ maxWidth: 420 }}>
+                      <div style={{ marginBottom: 4 }}>{upload.name}{upload.error ? ` · ${upload.error}` : ''}</div>
+                      <Progress percent={upload.percent} status={upload.error ? 'exception' : upload.percent >= 100 ? 'success' : 'active'} />
+                      {upload.error && upload.retry ? <Button size="small" onClick={upload.retry}>重试</Button> : null}
+                    </div>
                   ) : null}
                   <Table rowKey="id" pagination={false} dataSource={drama.episodes} columns={[
                     { title: '集', dataIndex: 'no', width: 70 },
@@ -181,14 +196,21 @@ export function DramaPage() {
                       </Space>
                       {plan.precheckNote ? <p>{plan.precheckNote}</p> : null}
                       {plan.rejectSummary ? <pre style={{ whiteSpace: 'pre-wrap' }}>{plan.rejectSummary}</pre> : null}
-                      <div style={{ marginTop: 8 }}>{plan.platforms.map((item) => <Tag key={item.id}>{item.platformName} · {labelOf(item.listingStatus)}</Tag>)}</div>
+                      <div style={{ marginTop: 8 }}>{plan.platforms.map((item) => <PlatformChip key={item.id} name={item.platformName} sync={labelOf(item.listingStatus)} />)}</div>
                       {plan.shares?.length ? (
-                        <div style={{ marginTop: 8, color: 'var(--ds-text-2)' }}>
-                          {plan.shares.map((share) => {
-                            const name = plan.platforms.find((item) => item.platformId === share.platformId)?.platformName || '平台';
-                            return <div key={share.id}>{name}：分成比例 {String(share.clientRate)}%{share.overRate ? `，超出约定后 ${String(share.overRate)}%` : ''}{client ? '' : share.mode ? `（${labelOf(share.mode)}）` : ''}</div>;
-                          })}
-                        </div>
+                        <Table
+                          style={{ marginTop: 8 }}
+                          rowKey="id"
+                          pagination={false}
+                          size="small"
+                          dataSource={plan.shares}
+                          columns={[
+                            { title: '平台', render: (_: unknown, share: Plan['shares'][number]) => <PlatformChip name={plan.platforms.find((item) => item.platformId === share.platformId)?.platformName || '平台'} /> },
+                            { title: '分成比例', dataIndex: 'clientRate', className: 'ds-num', align: 'right' as const, render: (value: string) => `${value}%` },
+                            amountColumn<Plan['shares'][number]>({ title: '超出后比例', dataIndex: 'overRate', currency: '', digits: 2 }),
+                            ...(client ? [] : [{ title: '方式', dataIndex: 'mode', render: (value: string) => labelOf(value) }]),
+                          ]}
+                        />
                       ) : null}
                       <Space style={{ marginTop: 8 }}>
                         {client && ['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button onClick={async () => { await api(`/plans/${plan.id}/withdraw`, { method: 'POST' }); load(); }}>撤回</Button> : null}
@@ -218,6 +240,14 @@ export function DramaPage() {
       </Modal>
     </div>
   );
+}
+
+function flowStep(drama: Drama) {
+  if (!drama.episodes.length) return 0;
+  if (drama.phase === 'action' || drama.phase === 'review') return 1;
+  if (drama.phase === 'ready') return 2;
+  if (drama.phase === 'live') return 3;
+  return drama.assets.length ? 2 : 0;
 }
 
 function SegmentedRound({ value, onChange }: { value: 'FIRST' | 'SECOND'; onChange: (value: 'FIRST' | 'SECOND') => void }) {

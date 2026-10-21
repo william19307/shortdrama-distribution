@@ -1,10 +1,12 @@
-import { App, Button, Card, Form, Input, InputNumber, Select, Space, Switch, Table, Tag, Upload } from 'antd';
+import { motion as motionTokens } from '@ds/tokens';
+import { App, Button, Card, Drawer, Form, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Upload } from 'antd';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, SHARE_MODE_LABEL } from '@shortform/shared';
 import { api, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
-import { ErrorNote, PageHead, StatusTag, dayText, labelOf } from '../ui';
+import { ErrorNote, PageHead, PlatformChip, StatusTag, dayText, labelOf } from '../ui';
 
 interface Plan {
   id: string; code: string; status: string; statusLabel?: string; round: string; rejectSummary?: string | null;
@@ -16,6 +18,7 @@ interface Plan {
 }
 
 export function WorkbenchPage() {
+  const { user } = useAuth();
   const [data, setData] = useState<Record<string, number | { minWithdrawAmount: string; deviationPct: string; syncDeadline: string }> | null>(null);
   const [error, setError] = useState('');
   useEffect(() => { api<typeof data>('/workbench').then(setData).catch((err) => setError(err.message)); }, []);
@@ -29,7 +32,7 @@ export function WorkbenchPage() {
     ['paying', '待打款'],
     ['pendingShots', '截图待归档'],
     ['overdue', '已过预计时间'],
-  ];
+  ].filter(([key]) => user?.role !== 'BD' || !['entry', 'toReview', 'invoices', 'paying', 'shareReview'].includes(key)) as [string, string][];
   return (
     <div>
       <PageHead title="工作台" hint="数字是你职责范围内还没做完的事。" />
@@ -139,16 +142,38 @@ export function ReviewsPage() {
     <div>
       <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。" />
       <ErrorNote error={error} />
-      <Select allowClear placeholder="状态" style={{ width: 180, marginBottom: 12 }} value={status} onChange={setStatus} options={['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION', 'SHARE_CONFIG'].map((value) => ({ value, label: labelOf(value) }))} />
+      <Tabs
+        activeKey={status || 'ALL'}
+        onChange={(value) => setStatus(value === 'ALL' ? undefined : value)}
+        items={[
+          { key: 'ALL', label: '全部' },
+          { key: 'PENDING_REVIEW', label: '待处理' },
+          { key: 'IN_REVIEW', label: '审核中' },
+          { key: 'NEEDS_REVISION', label: '需修改' },
+        ]}
+      />
+      <AnimatePresence mode="wait">
+        <motion.div key={status || 'ALL'} {...motionTokens.presets.page}>
       <Table rowKey="id" dataSource={rows?.items || []} pagination={false} onRow={(row) => ({ onClick: () => nav(`/reviews/${row.id}`), style: { cursor: 'pointer' } })} columns={[
-        { title: '单号', dataIndex: 'code' },
-        { title: '剧', dataIndex: ['drama', 'title'] },
+        { title: '单号', dataIndex: 'code', className: 'ds-num' },
+        {
+          title: '剧',
+          render: (_: unknown, row: Plan) => (
+            <span className="ds-cover">
+              <span className="ds-poster"><span className="ds-poster__art"><span className="ds-poster__title">{row.drama.title.slice(0, 1)}</span></span></span>
+              <span><b>{row.drama.title}</b><small>{row.drama.code}</small></span>
+            </span>
+          ),
+        },
         { title: '客户', dataIndex: ['company', 'name'] },
         { title: '轮次', dataIndex: 'round', render: labelOf },
         { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
       ]} />
-      {plan ? (
-        <Card title={`${plan.drama.title} · ${plan.code}`} style={{ marginTop: 16 }} extra={<StatusTag status={plan.status} />}>
+        </motion.div>
+      </AnimatePresence>
+      <Drawer title={plan ? `${plan.drama.title} · ${plan.code}` : '审核'} open={Boolean(plan)} width={720} onClose={() => nav('/reviews')} extra={plan ? <StatusTag status={plan.status} /> : null}>
+        {plan ? (
+          <>
           <Space wrap>
             {['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button type="primary" onClick={async () => { await api(`/reviews/${plan.id}/open`, { method: 'POST' }); refresh(); }}>开始审核</Button> : null}
             {plan.status === 'IN_REVIEW' ? <Button onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
@@ -156,7 +181,7 @@ export function ReviewsPage() {
           </Space>
           {plan.rejectSummary ? <pre>{plan.rejectSummary}</pre> : null}
           <Table style={{ marginTop: 12 }} rowKey="id" pagination={false} dataSource={plan.episodes || []} columns={[
-            { title: '集', dataIndex: 'no', width: 70 },
+            { title: '集', dataIndex: 'no', width: 70, className: 'ds-num', align: 'right' as const },
             { title: '文件', dataIndex: 'fileName' },
             { title: '状态', dataIndex: 'reviewStatus', render: (value) => <StatusTag status={value} /> },
             { title: '原因', dataIndex: 'rejectReason' },
@@ -171,8 +196,9 @@ export function ReviewsPage() {
             },
           ]} />
           <Input style={{ marginTop: 8, maxWidth: 420 }} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="驳回原因" />
-        </Card>
-      ) : null}
+          </>
+        ) : null}
+      </Drawer>
     </div>
   );
 }
@@ -182,7 +208,7 @@ export function SharesPage() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { message } = App.useApp();
-  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
+  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER';
   const [rows, setRows] = useState<Page<Plan> | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
@@ -219,7 +245,7 @@ export function SharesPage() {
             const set = (key: string, value: unknown) => setDraft({ ...draft, [item.platformId]: { ...row, [key]: value } });
             return (
               <Space key={item.platformId} wrap style={{ display: 'flex', marginBottom: 8 }}>
-                <b style={{ width: 120 }}>{item.platformName}</b>
+                <span style={{ width: 140 }}><PlatformChip name={item.platformName} /></span>
                 <Select style={{ width: 120 }} value={row.mode} onChange={(value) => set('mode', value)} options={Object.entries(SHARE_MODE_LABEL).map(([value, label]) => ({ value, label }))} />
                 <Input style={{ width: 100 }} value={row.clientRate} onChange={(event) => set('clientRate', event.target.value)} addonAfter="%" />
                 {row.mode === 'MG_OVER' ? <Input style={{ width: 120 }} placeholder="超出比例" value={row.overRate} onChange={(event) => set('overRate', event.target.value)} /> : null}

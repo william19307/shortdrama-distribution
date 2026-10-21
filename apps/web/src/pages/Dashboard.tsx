@@ -1,10 +1,14 @@
-import { chart } from '@ds/tokens';
-import { Card, Col, Row, Statistic } from 'antd';
+import { CaretDownFilled, CaretUpFilled } from '@ant-design/icons';
+import { chart, colors, platformColor, platformMarker, type PlatformKey } from '@ds/tokens';
+import { RankBadge } from '@ds/RankBadge';
+import { Card, Col, Row } from 'antd';
 import * as echarts from 'echarts';
+import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { useAuth } from '../auth';
-import { ErrorNote, PageHead, money } from '../ui';
+import { useDsTheme } from '../theme';
+import { ErrorNote, PageHead, PlatformChip, money } from '../ui';
 
 interface Dash {
   views: number;
@@ -20,8 +24,11 @@ interface Dash {
   top: { dramaId: string; title: string; views: number }[];
 }
 
+const PLATFORM_KEYS = new Set<string>(['ReelShort', 'DramaBox', 'ShortMax', 'FlexTV', 'GoodShort']);
+
 export function DashboardPage() {
   const { user } = useAuth();
+  const { mode } = useDsTheme();
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
 
@@ -33,47 +40,112 @@ export function DashboardPage() {
     if (!data) return;
     const trendEl = document.getElementById('trend-chart');
     const topEl = document.getElementById('top-chart');
-    if (!trendEl || !topEl) return;
+    const platEl = document.getElementById('platform-chart');
+    if (!trendEl || !topEl || !platEl) return;
     const trend = echarts.init(trendEl);
     const top = echarts.init(topEl);
-    const grid = chart.grid.dark;
+    const plat = echarts.init(platEl);
+    const palette = colors[mode];
+    const grid = chart.grid[mode];
+    const axis = { color: palette.textTertiary };
     trend.setOption({
-      color: [chart.categorical[0], chart.categorical[2]],
+      color: [...chart.categorical],
+      textStyle: { color: palette.textSecondary, fontFamily: 'Inter, "Noto Sans SC", sans-serif' },
       tooltip: { trigger: 'axis' },
-      legend: { textStyle: { color: '#AEAEB2' } },
+      legend: { textStyle: { color: palette.textSecondary } },
       grid: { left: 48, right: 24, top: 36, bottom: 28 },
-      xAxis: { type: 'category', data: data.trend.map((row) => row.date.slice(5)), axisLabel: { color: '#86868B' }, axisLine: { lineStyle: { color: grid } } },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: grid } }, axisLabel: { color: '#86868B' } },
-      series: [{ name: '播放', type: 'line', smooth: true, data: data.trend.map((row) => row.views), areaStyle: { color: 'rgba(214,21,60,.18)' } }],
+      xAxis: { type: 'category', data: data.trend.map((row) => row.date.slice(5)), axisLabel: axis, axisLine: { lineStyle: { color: grid } } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: grid } }, axisLabel: axis },
+      series: [
+        { name: '播放', type: 'line', smooth: true, data: data.trend.map((row) => row.views), areaStyle: { color: chart.sequential[1] } },
+        { name: '估算人民币', type: 'line', smooth: true, yAxisIndex: 0, data: data.trend.map((row) => Number(row.revenueCny)) },
+      ],
     });
     top.setOption({
-      color: [chart.categorical[0]],
+      color: [chart.categorical[1]],
+      textStyle: { color: palette.textSecondary },
       grid: { left: 100, right: 24, top: 16, bottom: 24 },
-      xAxis: { type: 'value', splitLine: { lineStyle: { color: grid } }, axisLabel: { color: '#86868B' } },
-      yAxis: { type: 'category', data: data.top.map((row) => row.title).reverse(), axisLabel: { color: '#AEAEB2', width: 88, overflow: 'truncate' } },
+      xAxis: { type: 'value', splitLine: { lineStyle: { color: grid } }, axisLabel: axis },
+      yAxis: { type: 'category', data: data.top.map((row) => row.title).reverse(), axisLabel: { color: palette.textSecondary, width: 88, overflow: 'truncate' } },
       series: [{ type: 'bar', data: data.top.map((row) => row.views).reverse(), barMaxWidth: 18 }],
     });
-    const onResize = () => { trend.resize(); top.resize(); };
+    const listed = data.platforms.filter((name): name is PlatformKey => PLATFORM_KEYS.has(name));
+    plat.setOption({
+      textStyle: { color: palette.textSecondary },
+      tooltip: { trigger: 'axis' },
+      legend: { textStyle: { color: palette.textSecondary } },
+      grid: { left: 48, right: 88, top: 28, bottom: 28 },
+      xAxis: { type: 'category', data: ['在架'], axisLabel: axis, axisLine: { lineStyle: { color: grid } } },
+      yAxis: { type: 'value', min: 0, max: 2, splitLine: { lineStyle: { color: grid } }, axisLabel: axis },
+      series: listed.map((name) => ({
+        name,
+        type: 'line',
+        data: [1],
+        color: platformColor(name, mode),
+        symbol: platformMarker[name].symbol,
+        symbolSize: 12,
+        lineStyle: { type: platformMarker[name].dash, width: 2 },
+        endLabel: { show: true, formatter: name, color: palette.text },
+      })),
+    });
+    const onResize = () => { trend.resize(); top.resize(); plat.resize(); };
     window.addEventListener('resize', onResize);
-    return () => { window.removeEventListener('resize', onResize); trend.dispose(); top.dispose(); };
-  }, [data]);
+    return () => { window.removeEventListener('resize', onResize); trend.dispose(); top.dispose(); plat.dispose(); };
+  }, [data, mode]);
 
   const client = user?.role === 'CLIENT';
+  const delta = data?.delta;
+  const deltaUp = (delta ?? 0) >= 0;
   return (
     <div>
       <PageHead title={client ? '数据总览' : '数据看板'} hint={data?.conclusion} />
       <ErrorNote error={error} />
-      <div className="stat-row">
-        <Card className="ds-stat"><Statistic title="播放" value={data?.views ?? 0} /></Card>
-        <Card className="ds-stat"><Statistic title="估算人民币" value={data ? money(data.revenueCny) : '—'} /></Card>
-        <Card className="ds-stat"><Statistic title="正在发行的剧" value={data?.liveDramas ?? 0} /></Card>
-        <Card className="ds-stat"><Statistic title="在架平台" value={data?.platformCount ?? 0} suffix={data?.platforms?.length ? '' : ''} /></Card>
-      </div>
-      <p style={{ color: 'var(--ds-text-3)', marginTop: -8 }}>{data?.asOf}。{data?.revenueNote}{data?.delta != null ? ` 近 7 天播放较前一周 ${data.delta >= 0 ? '+' : ''}${data.delta}%。` : ''}</p>
+      <motion.div className="stat-row" {...chartMotion.list}>
+        <Stat label="播放" value={data ? data.views.toLocaleString('en-US') : '—'} delta={delta} up={deltaUp} />
+        <Stat label="估算人民币" value={data ? money(data.revenueCny) : '—'} />
+        <Stat label="正在发行的剧" value={data ? String(data.liveDramas) : '—'} />
+        <Stat label="在架平台" value={data ? String(data.platformCount) : '—'} />
+      </motion.div>
+      <p style={{ color: 'var(--ds-text-3)', marginTop: -8 }}>{data?.asOf}。{data?.revenueNote}</p>
+      <div style={{ marginBottom: 16 }}>{data?.platforms.map((name) => <PlatformChip key={name} name={name} sync="在架" />)}</div>
       <Row gutter={16}>
         <Col xs={24} lg={14}><Card title="播放趋势"><div id="trend-chart" className="chart-box" /></Card></Col>
-        <Col xs={24} lg={10}><Card title="播放最多"><div id="top-chart" className="chart-box" /></Card></Col>
+        <Col xs={24} lg={10}>
+          <Card title="播放最多">
+            <motion.ol style={{ listStyle: 'none', margin: '0 0 12px', padding: 0, display: 'grid', gap: 8 }} {...chartMotion.list}>
+              {(data?.top || []).map((row, index) => (
+                <motion.li key={row.dramaId} style={{ display: 'flex', alignItems: 'center', gap: 8 }} {...chartMotion.item}>
+                  <RankBadge rank={index + 1} size="sm" />
+                  <span style={{ flex: 1 }}>{row.title}</span>
+                  <span className="ds-num">{row.views.toLocaleString('en-US')}</span>
+                </motion.li>
+              ))}
+            </motion.ol>
+            <div id="top-chart" className="chart-box" />
+          </Card>
+        </Col>
       </Row>
+      <Card title="在架平台" style={{ marginTop: 16 }}><div id="platform-chart" className="chart-box" /></Card>
     </div>
+  );
+}
+
+const chartMotion = {
+  list: { initial: 'hidden' as const, animate: 'show' as const, variants: { hidden: {}, show: { transition: { staggerChildren: 0.06 } } } },
+  item: { variants: { hidden: { opacity: 0, y: 12 }, show: { opacity: 1, y: 0 } } },
+};
+
+function Stat({ label, value, delta, up }: { label: string; value: string; delta?: number | null; up?: boolean }) {
+  return (
+    <motion.div className="ds-stat" {...chartMotion.item}>
+      <div className="ds-stat__label">{label}</div>
+      <div className="ds-stat__value">{value}</div>
+      {delta != null ? (
+        <div className={`ds-stat__delta ${up ? 'up' : 'down'}`}>
+          {up ? <CaretUpFilled /> : <CaretDownFilled />}
+          {up ? '+' : ''}{delta}%
+        </div>
+      ) : null}
+    </motion.div>
   );
 }

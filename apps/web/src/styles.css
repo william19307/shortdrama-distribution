@@ -13,13 +13,13 @@
   flex-direction: column;
   justify-content: flex-end;
   background:
-    radial-gradient(60% 50% at 20% 10%, rgba(214,21,60,.35), transparent 60%),
+    var(--ds-grad-glow-orb),
     var(--ds-grad-bento);
   overflow: hidden;
 }
-.auth-hero h1 { font-size: 56px; line-height: .95; letter-spacing: -.04em; margin: 12px 0; font-weight: 800; }
-.auth-panel { display: flex; align-items: center; padding: 40px; background: var(--ds-bg-elevated); }
-.auth-card { width: 100%; }
+.auth-hero h1 { font-size: var(--ds-fs-display-sm); line-height: var(--ds-lh-display-sm); letter-spacing: var(--ds-ls-display-sm); margin: 12px 0; font-weight: 700; }
+.auth-panel { display: flex; align-items: center; padding: 40px; background: var(--ds-bg); }
+.auth-card { width: 100%; background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius-xl); padding: 28px; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
 .page-head h1 { margin: 0; font-size: 22px; letter-spacing: -.03em; }
 .page-head p { margin: 4px 0 0; color: var(--ds-text-2); }

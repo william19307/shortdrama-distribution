@@ -12,9 +12,12 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@shortform/shared': path.resolve(__dirname, '../../packages/shared/src/index.ts'),
-        '@ds': path.resolve(__dirname, '../design-system'),
+        '@ds': path.resolve(__dirname, 'src/ds'),
         antd: path.resolve(__dirname, 'node_modules/antd'),
         '@ant-design/icons': path.resolve(__dirname, 'node_modules/@ant-design/icons'),
+        react: path.resolve(__dirname, 'node_modules/react'),
+        'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+        'framer-motion': path.resolve(__dirname, 'node_modules/framer-motion'),
       },
     },
     server: {

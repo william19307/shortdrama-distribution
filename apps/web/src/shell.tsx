@@ -16,11 +16,12 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import type { Role } from '@shortform/shared';
-import { Layout, Menu, Dropdown, Space, Typography } from 'antd';
+import { Layout, Menu, Dropdown, Space, Typography, Segmented, Switch } from 'antd';
 import type { MenuProps } from 'antd';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { roleLabel, useAuth } from './auth';
+import { useDsTheme } from './theme';
 
 const { Sider, Header, Content } = Layout;
 
@@ -76,6 +77,8 @@ function leafKeys(items: MenuItem[]): string[] {
 
 export function Shell() {
   const { user, logout } = useAuth();
+  const { mode, density, setMode, setDensity } = useDsTheme();
+  const [openKeys, setOpenKeys] = useState<string[]>(user?.role === 'CLIENT' ? ['client-overview'] : []);
   const nav = useNavigate();
   const loc = useLocation();
   const items = useMemo(() => {
@@ -104,10 +107,11 @@ export function Shell() {
       <Sider width={228} breakpoint="lg" collapsedWidth={64}>
         <div style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 18px' }} className="brand-mark">短剧发行</div>
         <Menu
-          theme="dark"
+          theme={mode === 'dark' ? 'dark' : 'light'}
           mode="inline"
           selectedKeys={selected ? [selected] : []}
-          defaultOpenKeys={user?.role === 'CLIENT' ? ['client-overview'] : []}
+          openKeys={user?.role === 'CLIENT' ? openKeys : undefined}
+          onOpenChange={setOpenKeys}
           items={items}
           onClick={({ key }) => { if (key.startsWith('/')) nav(key); }}
           style={{ borderInlineEnd: 0 }}
@@ -115,7 +119,14 @@ export function Shell() {
         <div className="sider-foot">内容由客户自行对接海外平台，本平台不推送成片。</div>
       </Sider>
       <Layout>
-        <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingInline: 16, backdropFilter: 'blur(16px)', borderBottom: '1px solid var(--ds-border)' }}>
+        <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, paddingInline: 16, backdropFilter: 'blur(16px)', borderBottom: '1px solid var(--ds-border)' }}>
+          <Segmented
+            size="small"
+            value={mode}
+            onChange={(value) => setMode(value as 'dark' | 'light')}
+            options={[{ label: '深色', value: 'dark' }, { label: '浅色', value: 'light' }]}
+          />
+          <Switch size="small" checked={density === 'compact'} onChange={(checked) => setDensity(checked ? 'compact' : 'comfortable')} checkedChildren="紧凑" unCheckedChildren="舒适" />
           <Dropdown trigger={['click']} menu={{ items: accountMenu }}>
             <Space style={{ cursor: 'pointer' }}>
               <Typography.Text>{user?.name}</Typography.Text>

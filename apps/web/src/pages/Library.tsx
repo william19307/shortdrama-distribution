@@ -1,4 +1,7 @@
+import { PlaySquareOutlined } from '@ant-design/icons';
+import { motion as motionTokens } from '@ds/tokens';
 import { Button, Input, Segmented, Select, Space, Table, Typography } from 'antd';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { api, download, qs, type Page } from '../api';
@@ -61,38 +64,61 @@ export function LibraryPage() {
         />
         <Segmented value={view} onChange={(value) => setView(value as 'wall' | 'table')} options={[{ label: '封面', value: 'wall' }, { label: '表格', value: 'table' }]} />
       </Space>
-      {view === 'wall' ? (
-        <div className="poster-grid">
-          {(data?.items || []).map((drama) => (
-            <button key={drama.id} className="ds-poster" onClick={() => nav(`/dramas/${drama.id}`)}>
-              {drama.coverUrl ? <img src={drama.coverUrl} alt="" /> : null}
-              <div className="ds-poster__art" style={{ background: drama.coverUrl ? 'linear-gradient(transparent, rgba(0,0,0,.85))' : 'var(--ds-grad-bento)' }}>
-                <div className="ds-poster__kicker">{drama.code}</div>
-                <div className="ds-poster__title">{drama.title}</div>
+      <AnimatePresence mode="wait">
+        <motion.div key={view} {...motionTokens.presets.page}>
+          {view === 'wall' ? (
+            !data || loading ? null : data.items.length ? (
+              <div className="poster-grid">
+                {data.items.map((drama) => (
+                  <motion.button key={drama.id} className="ds-poster" onClick={() => nav(`/dramas/${drama.id}`)} {...motionTokens.presets.cardHover}>
+                    {drama.coverUrl ? <img src={drama.coverUrl} alt="" /> : null}
+                    <div className="ds-poster__art" style={{ background: drama.coverUrl ? 'var(--ds-grad-bar)' : 'var(--ds-grad-bento)' }}>
+                      <div className="ds-poster__kicker">{drama.code}</div>
+                      <div className="ds-poster__title">{drama.title}</div>
+                    </div>
+                    <div className="ds-poster__badge"><PhaseTag phase={drama.phase} /></div>
+                    <div className="ds-poster__info">{drama.genre || '未分题材'} · {drama.language} · {drama._count?.episodes ?? 0} 集</div>
+                  </motion.button>
+                ))}
               </div>
-              <div className="ds-poster__badge"><PhaseTag phase={drama.phase} /></div>
-              <div className="ds-poster__info">{drama.genre || '未分题材'} · {drama.language} · {drama._count?.episodes ?? 0} 集</div>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <Table
-          rowKey="id"
-          loading={loading}
-          dataSource={data?.items || []}
-          pagination={{ current: page, pageSize: 24, total: data?.total || 0, onChange: setPage, showSizeChanger: false }}
-          onRow={(row) => ({ onClick: () => nav(`/dramas/${row.id}`), style: { cursor: 'pointer' } })}
-          columns={[
-            { title: '编号', dataIndex: 'code', width: 110 },
-            { title: '剧名', dataIndex: 'title' },
-            { title: '客户', dataIndex: ['company', 'name'], render: (value: string) => value || '—' },
-            { title: '题材', dataIndex: 'genre' },
-            { title: '语言', dataIndex: 'language', width: 90 },
-            { title: '状态', dataIndex: 'phase', width: 120, render: (value: string) => <PhaseTag phase={value} /> },
-            { title: '更新', dataIndex: 'updatedAt', width: 120, render: dayText },
-          ].filter((col) => client ? col.title !== '客户' : true)}
-        />
-      )}
+            ) : (
+              <div className="ds-empty">
+                <div className="ds-empty__icon"><PlaySquareOutlined /></div>
+                <h5>还没有剧</h5>
+                <p>上传成片和封面后，会按封面墙排在这里。</p>
+                {client ? <Button type="primary" onClick={() => nav('/dramas/new')}>新建剧目</Button> : null}
+              </div>
+            )
+          ) : (
+            <Table
+              rowKey="id"
+              loading={loading}
+              dataSource={data?.items || []}
+              pagination={{ current: page, pageSize: 24, total: data?.total || 0, onChange: setPage, showSizeChanger: false }}
+              onRow={(row) => ({ onClick: () => nav(`/dramas/${row.id}`), style: { cursor: 'pointer' } })}
+              columns={[
+                { title: '编号', dataIndex: 'code', width: 110, className: 'ds-num', align: 'right' as const },
+                {
+                  title: '剧名',
+                  dataIndex: 'title',
+                  render: (_: string, row: DramaCard) => (
+                    <span className="ds-cover">
+                      <span className="ds-poster">{row.coverUrl ? <img src={row.coverUrl} alt="" /> : <span className="ds-poster__art"><span className="ds-poster__title">{row.title.slice(0, 1)}</span></span>}</span>
+                      <span><b>{row.title}</b><small>{row.code}</small></span>
+                    </span>
+                  ),
+                },
+                { title: '客户', dataIndex: ['company', 'name'], render: (value: string) => value || '—' },
+                { title: '题材', dataIndex: 'genre' },
+                { title: '语言', dataIndex: 'language', width: 90 },
+                { title: '集数', dataIndex: ['_count', 'episodes'], width: 80, className: 'ds-num', align: 'right' as const, render: (value: number) => value ?? '—' },
+                { title: '状态', dataIndex: 'phase', width: 120, render: (value: string) => <PhaseTag phase={value} /> },
+                { title: '更新', dataIndex: 'updatedAt', width: 120, render: dayText },
+              ].filter((col) => client ? col.title !== '客户' : true)}
+            />
+          )}
+        </motion.div>
+      </AnimatePresence>
       {view === 'wall' && (data?.total || 0) > 24 ? (
         <div style={{ marginTop: 16 }}>
           <Typography.Text type="secondary">共 {data?.total} 部</Typography.Text>

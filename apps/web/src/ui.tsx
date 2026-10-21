@@ -13,11 +13,12 @@ import {
   SHARE_MODE_LABEL,
   TICKET_STATUS_LABEL,
   TICKET_TYPE_LABEL,
-  toneForPlan,
 } from '@shortform/shared';
 import { toneToTagColor } from '@ds/antdTheme';
+import { bizToneFor, platform, platformSolid, type AnyPlatformKey, type BizStatus, type BizTone, type PlatformKey } from '@ds/tokens';
 import { Alert, Tag } from 'antd';
 import type { ReactNode } from 'react';
+import { useAuth } from './auth';
 
 const LABELS: Record<string, string> = {
   ...ROLE_LABEL,
@@ -56,16 +57,93 @@ export function labelOf(status?: string | null) {
   return LABELS[status] || CLIENT_PHASE_META[status as keyof typeof CLIENT_PHASE_META]?.label || status;
 }
 
-export function StatusTag({ status, text }: { status?: string | null; text?: string }) {
-  if (!status) return <Tag>未开始</Tag>;
-  const tone = toneForPlan(status);
-  return <Tag color={toneToTagColor[tone]}>{text || labelOf(status)}</Tag>;
+const STATUS_BIZ: Record<string, BizStatus> = {
+  DRAFT: 'draft',
+  PENDING: 'reviewing',
+  PENDING_ASSIGN: 'actionRequired',
+  PENDING_REVIEW: 'reviewing',
+  IN_REVIEW: 'reviewing',
+  SHARE_CONFIG: 'reviewing',
+  SHARE_REVIEW: 'reviewing',
+  REVIEW: 'reviewing',
+  NEEDS_REVISION: 'needMaterial',
+  PRECHECK_FAILED: 'needMaterial',
+  REPLACED: 'toSubmit',
+  UNSAMPLED: 'reviewing',
+  PENDING_ENTRY: 'pendingSettle',
+  PENDING_APPLY: 'pendingSettle',
+  PENDING_INVOICE: 'invoicePending',
+  INVOICE_REVIEW: 'reviewing',
+  PAYING: 'pendingSettle',
+  APPROVED: 'approved',
+  LIVE: 'live',
+  DISTRIBUTING: 'live',
+  LISTED: 'live',
+  REJECTED: 'rejected',
+  PAID: 'settled',
+  SETTLED: 'settled',
+  EFFECTIVE: 'settled',
+  EXPIRED: 'offline',
+  OFFLINE: 'offline',
+  WITHDRAWN: 'offline',
+  UNVERIFIED: 'toSubmit',
+  CHANGE_PENDING: 'actionRequired',
+  NO_SETTLEMENT: 'rejected',
+};
+
+function viewerOf(role?: string): 'client' | 'ops' | 'finance' {
+  if (role === 'CLIENT') return 'client';
+  if (role === 'FINANCE') return 'finance';
+  return 'ops';
 }
+
+export function StatusTag({ status, text }: { status?: string | null; text?: string }) {
+  const { user } = useAuth();
+  if (!status) return <Tag>未开始</Tag>;
+  const biz = STATUS_BIZ[status];
+  const tone: BizTone = biz ? bizToneFor(biz, viewerOf(user?.role)) : 'neutral';
+  return <Tag bordered={false} color={toneToTagColor[tone]}>{text || labelOf(status)}</Tag>;
+}
+
+const PLATFORM_ALIAS: Record<string, AnyPlatformKey> = {
+  RS: 'ReelShort', DB: 'DramaBox', SM: 'ShortMax', FT: 'FlexTV', GS: 'GoodShort', NS: 'NetShort',
+};
+
+function platformKey(name: string): AnyPlatformKey | null {
+  if (name in platform) return name as PlatformKey;
+  return PLATFORM_ALIAS[name] ?? null;
+}
+
+function platformTextColor(key: AnyPlatformKey | null) {
+  if (key === 'ShortMax') return 'var(--ds-platform-shortmax-text)';
+  if (key === 'FlexTV') return 'var(--ds-platform-flextv-text)';
+  if (key && key in platform) return `var(${platform[key as PlatformKey].css})`;
+  return 'var(--ds-text-2)';
+}
+
+export function PlatformChip({ name, sync }: { name: string; sync?: string }) {
+  const key = platformKey(name);
+  const letters = (name.match(/[A-Za-z]/g) || []).join('').slice(0, 2).toUpperCase() || name.slice(0, 1);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, marginRight: 8 }}>
+      <span className="ds-plat-logo ds-plat-logo--sm" style={{ background: key ? platformSolid(key) : 'var(--ds-text-3)' }}>{letters}</span>
+      <span className="ds-plat-sync" style={{ color: platformTextColor(key) }}>{sync ? `${name} · ${sync}` : name}</span>
+    </span>
+  );
+}
+
+export function MoneyText({ value }: { value?: string | number | null }) {
+  return <span className="ds-money">{money(value)}</span>;
+}
+
+const PHASE_TONE: Record<string, BizTone> = {
+  warning: 'action', neutral: 'neutral', success: 'success', error: 'error', info: 'info', brand: 'brand',
+};
 
 export function PhaseTag({ phase }: { phase?: string | null }) {
   const meta = phase ? CLIENT_PHASE_META[phase as keyof typeof CLIENT_PHASE_META] : undefined;
   if (!meta) return <Tag>未发行</Tag>;
-  return <Tag color={toneToTagColor[meta.tone]}>{meta.label}</Tag>;
+  return <Tag bordered={false} color={toneToTagColor[PHASE_TONE[meta.tone] || 'neutral']}>{meta.label}</Tag>;
 }
 
 export function PageHead({ title, extra, hint }: { title: string; extra?: ReactNode; hint?: string }) {

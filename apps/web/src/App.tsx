@@ -1,8 +1,10 @@
 import { ConfigProvider, App as AntApp, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import { getAntdTheme } from '@ds/antdTheme';
+import { useEffect, useMemo } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { homeFor, useAuth } from './auth';
+import { useDsTheme } from './theme';
 import { Shell } from './shell';
 import { LoginPage } from './pages/Login';
 import { DashboardPage } from './pages/Dashboard';
@@ -24,12 +26,16 @@ function Gate({ children }: { children: React.ReactNode }) {
 
 export function AppRoutes() {
   const { user, loading } = useAuth();
-  const staff = user && user.role !== 'CLIENT';
-  const theme = getAntdTheme({ mode: 'dark', density: staff ? 'compact' : 'comfortable' });
-  if (typeof document !== 'undefined') document.documentElement.dataset.density = staff ? 'compact' : 'comfortable';
+  const loc = useLocation();
+  const { mode, density } = useDsTheme();
+  const effective = loc.pathname === '/login' ? 'comfortable' : density;
+  const theme = useMemo(() => getAntdTheme({ mode, density: effective }), [mode, effective]);
+  useEffect(() => {
+    document.documentElement.dataset.density = effective;
+  }, [effective]);
 
   return (
-    <ConfigProvider theme={theme} locale={zhCN}>
+    <ConfigProvider theme={theme} locale={zhCN} button={{ autoInsertSpace: false }}>
       <AntApp>
         <Routes>
           <Route path="/login" element={loading ? <Spin /> : user ? <Navigate to={homeFor(user.role)} replace /> : <LoginPage />} />

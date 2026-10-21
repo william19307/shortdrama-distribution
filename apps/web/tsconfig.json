@@ -16,7 +16,7 @@
     "baseUrl": ".",
     "paths": {
       "@shortform/shared": ["../../packages/shared/src/index.ts"],
-      "@ds/*": ["../design-system/*"],
+      "@ds/*": ["src/ds/*"],
       "antd": ["node_modules/antd"],
       "antd/*": ["node_modules/antd/*"]
     }
