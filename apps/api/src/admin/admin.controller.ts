@@ -1,5 +1,6 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { pageSchema, platformCreateSchema, platformPatchSchema, settingsSchema, userCreateSchema, userPatchSchema } from '@shortform/shared';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { pageSchema, platformCreateSchema, platformPatchSchema, settingsSchema, taskCreateSchema, userCreateSchema, userPatchSchema } from '@shortform/shared';
+import { Response } from 'express';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -73,5 +74,32 @@ export class AdminController {
   @Get('tasks')
   tasks(@CurrentUser() user: AuthUser, @Query(new ZodPipe(pageSchema)) query: z.infer<typeof pageSchema>) {
     return this.admin.tasks(user, query);
+  }
+
+  @Post('tasks')
+  createTask(@CurrentUser() user: AuthUser, @Body(new ZodPipe(taskCreateSchema)) body: z.infer<typeof taskCreateSchema>) {
+    return this.admin.createTask(user, body);
+  }
+
+  @Post('tasks/:id/step')
+  stepTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.stepTask(user, id);
+  }
+
+  @Post('tasks/:id/retry')
+  retryTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.retryTask(user, id);
+  }
+
+  @Post('tasks/:id/cancel')
+  cancelTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.cancelTask(user, id);
+  }
+
+  @Get('tasks/:id/report')
+  async report(@CurrentUser() user: AuthUser, @Param('id') id: string, @Res() res: Response) {
+    const csv = await this.admin.report(user, id);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.send(`\uFEFF${csv}`);
   }
 }

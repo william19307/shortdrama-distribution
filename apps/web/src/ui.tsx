@@ -50,6 +50,11 @@ const LABELS: Record<string, string> = {
   MONTH: '自然月',
   QUARTER: '季度',
   CUSTOM_DAYS: '自定义天数',
+  RUNNING: '执行中',
+  SUCCESS: '已完成',
+  PARTIAL: '部分成功',
+  CANCELLED: '已取消',
+  FAILED: '失败',
 };
 
 export function labelOf(status?: string | null) {
@@ -89,6 +94,11 @@ const STATUS_BIZ: Record<string, BizStatus> = {
   UNVERIFIED: 'toSubmit',
   CHANGE_PENDING: 'actionRequired',
   NO_SETTLEMENT: 'rejected',
+  RUNNING: 'reviewing',
+  SUCCESS: 'approved',
+  PARTIAL: 'actionRequired',
+  CANCELLED: 'offline',
+  FAILED: 'rejected',
 };
 
 function viewerOf(role?: string): 'client' | 'ops' | 'finance' {

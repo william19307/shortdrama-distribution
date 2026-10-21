@@ -785,6 +785,9 @@ model AsyncTask {
   total      Int       @default(0)
   succeeded  Int       @default(0)
   failed     Int       @default(0)
+  skipped    Int       @default(0)
+  items      Json?
+  cancelRequested Boolean @default(false)
   result     Json?
   createdAt  DateTime  @default(now())
   finishedAt DateTime?

@@ -1,10 +1,11 @@
 import { CaretDownFilled, CaretUpFilled } from '@ant-design/icons';
 import { chart, colors, platformColor, platformMarker, type PlatformKey } from '@ds/tokens';
 import { RankBadge } from '@ds/RankBadge';
-import { Card, Col, Row } from 'antd';
+import { Button, Card, Col, Row } from 'antd';
 import * as echarts from 'echarts';
 import { motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { useDsTheme } from '../theme';
@@ -30,13 +31,16 @@ const PLATFORM_KEYS = new Set<string>(['ReelShort', 'DramaBox', 'ShortMax', 'Fle
 
 export function DashboardPage() {
   const { user } = useAuth();
+  const nav = useNavigate();
   const { mode } = useDsTheme();
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState('');
+  const [certStatus, setCertStatus] = useState('');
 
   useEffect(() => {
     api<Dash>('/dashboard').then(setData).catch((err) => setError(err.message));
-  }, []);
+    if (user?.role === 'CLIENT') api<{ certStatus: string }>('/company').then((company) => setCertStatus(company.certStatus)).catch(() => undefined);
+  }, [user]);
 
   useEffect(() => {
     if (!data) return;
@@ -100,7 +104,11 @@ export function DashboardPage() {
   const deltaUp = (delta ?? 0) >= 0;
   return (
     <div>
-      <PageHead title={client ? '数据总览' : '数据看板'} hint={data?.conclusion} />
+      <PageHead
+        title={client ? '数据总览' : '数据看板'}
+        hint={data?.conclusion}
+        extra={client && (certStatus === 'UNVERIFIED' || certStatus === 'REJECTED') ? <Button type="primary" onClick={() => nav('/company')}>去认证</Button> : null}
+      />
       {client && data?.updating ? <div style={{ margin: '0 0 12px', fontWeight: 600, color: '#cf1322' }}>{data.updatingLabel || '数据更新中'}</div> : null}
       <ErrorNote error={error} />
       <motion.div className="stat-row" {...chartMotion.list}>

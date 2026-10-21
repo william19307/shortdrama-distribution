@@ -681,16 +681,25 @@ export function AuditPage() {
 }
 
 export function TasksPage() {
+  const { message } = App.useApp();
   const [rows, setRows] = useState<Page<any> | null>(null);
-  useEffect(() => { api<Page<any>>('/tasks?page=1&pageSize=30').then(setRows); }, []);
+  const load = () => api<Page<any>>('/tasks?page=1&pageSize=30').then(setRows);
+  useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="任务" hint="导出等已经做完的任务记在这里。定时结算和报表导入还没有接上。" />
+      <PageHead title="任务中心" hint="客户只看自己的任务。主管可以看团队任务。失败项可以单独重试，取消只停掉还没做的项。" />
       <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
         { title: '名称', dataIndex: 'name' },
-        { title: '类型', dataIndex: 'type' },
-        { title: '状态', dataIndex: 'status' },
+        { title: '进度', dataIndex: 'progress', render: (value: number) => `${value || 0}%` },
         { title: '成功', dataIndex: 'succeeded' },
+        { title: '失败', dataIndex: 'failed' },
+        { title: '跳过', dataIndex: 'skipped' },
+        { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
+        { title: '', render: (_: unknown, row) => <Space>
+          <Button size="small" disabled={!row.failed} onClick={async () => { await api(`/tasks/${row.id}/retry`, { method: 'POST' }); message.success('已重试失败项'); load(); }}>仅重试失败项</Button>
+          <Button size="small" disabled={!['RUNNING', 'PENDING'].includes(row.status)} onClick={async () => { await api(`/tasks/${row.id}/cancel`, { method: 'POST' }); message.success('剩余项已取消'); load(); }}>取消剩余</Button>
+          <Button size="small" onClick={() => download(`/tasks/${row.id}/report`, `${row.name || 'task'}.csv`)}>下载报告</Button>
+        </Space> },
       ]} />
     </div>
   );

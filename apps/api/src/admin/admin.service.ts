@@ -1,8 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
-import { addDays, platformCreateSchema, platformPatchSchema, settingsSchema, shanghaiToday, userCreateSchema, userPatchSchema, pageSchema } from '@shortform/shared';
+import { addDays, platformCreateSchema, platformPatchSchema, settingsSchema, shanghaiToday, taskCreateSchema, userCreateSchema, userPatchSchema, pageSchema } from '@shortform/shared';
 import { assertFound } from '../core/access';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
@@ -191,12 +191,126 @@ export class AdminService {
   }
 
   async tasks(user: AuthUser, query: { page: number; pageSize: number }) {
-    const where = user.role === 'ADMIN' ? {} : { ownerId: user.id };
+    const where = this.taskScope(user);
     const [items, total] = await Promise.all([
       this.prisma.asyncTask.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (query.page - 1) * query.pageSize, take: query.pageSize }),
       this.prisma.asyncTask.count({ where }),
     ]);
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return { items: items.map((item) => this.presentTask(item)), total, page: query.page, pageSize: query.pageSize };
+  }
+
+  async createTask(user: AuthUser, input: z.infer<typeof taskCreateSchema>) {
+    const items = input.items.map((item) => ({ key: item.key, status: 'PENDING', message: '', attempts: 0, failOnce: Boolean(item.failOnce) }));
+    const task = await this.prisma.asyncTask.create({
+      data: { type: 'BATCH', name: input.name, ownerId: user.id, status: input.defer ? 'RUNNING' : 'PENDING', total: items.length, items },
+    });
+    if (input.defer) return this.presentTask(task);
+    return this.pump(task.id);
+  }
+
+  async stepTask(user: AuthUser, id: string) {
+    const task = await this.ownTask(user, id);
+    if (task.cancelRequested) throw new BadRequestException('任务已取消');
+    const items = this.taskItems(task.items);
+    const next = items.find((item) => item.status === 'PENDING');
+    if (!next) return this.finishTask(task.id, items, false);
+    this.settleItem(next);
+    return this.finishTask(task.id, items, false);
+  }
+
+  async retryTask(user: AuthUser, id: string) {
+    const task = await this.ownTask(user, id);
+    const items = this.taskItems(task.items);
+    const failed = items.filter((item) => item.status === 'FAILED');
+    if (!failed.length) throw new BadRequestException('没有失败项可以重试');
+    for (const item of failed) item.status = 'PENDING';
+    await this.prisma.asyncTask.update({ where: { id }, data: { items, status: 'RUNNING', cancelRequested: false } });
+    return this.pump(id, true);
+  }
+
+  async cancelTask(user: AuthUser, id: string) {
+    const task = await this.ownTask(user, id);
+    const items = this.taskItems(task.items);
+    for (const item of items) {
+      if (item.status === 'PENDING') {
+        item.status = 'SKIPPED';
+        item.message = '已取消';
+      }
+    }
+    return this.finishTask(id, items, true);
+  }
+
+  report(user: AuthUser, id: string) {
+    return this.ownTask(user, id).then((task) => {
+      const lines = ['项目,状态,说明,次数', ...this.taskItems(task.items).map((item) => [item.key, item.status, item.message, item.attempts].join(','))];
+      return lines.join('\n');
+    });
+  }
+
+  private taskScope(user: AuthUser): Prisma.AsyncTaskWhereInput {
+    if (user.role === 'ADMIN' || user.role === 'OPS_MANAGER') return {};
+    return { ownerId: user.id };
+  }
+
+  private async ownTask(user: AuthUser, id: string) {
+    const task = assertFound(await this.prisma.asyncTask.findUnique({ where: { id } }), '任务不存在');
+    if (user.role !== 'ADMIN' && user.role !== 'OPS_MANAGER' && task.ownerId !== user.id) throw new ForbiddenException('只能查看自己的任务');
+    return task;
+  }
+
+  private taskItems(value: Prisma.JsonValue | null): { key: string; status: string; message: string; attempts: number; failOnce: boolean }[] {
+    return Array.isArray(value) ? value as { key: string; status: string; message: string; attempts: number; failOnce: boolean }[] : [];
+  }
+
+  private settleItem(item: { status: string; message: string; attempts: number; failOnce: boolean }) {
+    item.attempts += 1;
+    if (item.failOnce && item.attempts === 1) {
+      item.status = 'FAILED';
+      item.message = '处理失败';
+      return;
+    }
+    item.status = 'SUCCESS';
+    item.failOnce = false;
+    item.message = '';
+  }
+
+  private async pump(id: string, failedOnly = false) {
+    const task = assertFound(await this.prisma.asyncTask.findUnique({ where: { id } }), '任务不存在');
+    const items = this.taskItems(task.items);
+    let cancel = task.cancelRequested;
+    for (const item of items) {
+      if (failedOnly && item.status !== 'PENDING') continue;
+      const fresh = await this.prisma.asyncTask.findUnique({ where: { id } });
+      cancel = Boolean(fresh?.cancelRequested);
+      if (cancel) {
+        if (item.status === 'PENDING') {
+          item.status = 'SKIPPED';
+          item.message = '已取消';
+        }
+        continue;
+      }
+      if (item.status !== 'PENDING') continue;
+      this.settleItem(item);
+    }
+    return this.finishTask(id, items, cancel);
+  }
+
+  private async finishTask(id: string, items: { status: string }[], cancel: boolean) {
+    const succeeded = items.filter((item) => item.status === 'SUCCESS').length;
+    const failed = items.filter((item) => item.status === 'FAILED').length;
+    const skipped = items.filter((item) => item.status === 'SKIPPED').length;
+    const pending = items.some((item) => item.status === 'PENDING');
+    const status = cancel ? 'CANCELLED' : pending ? 'RUNNING' : failed ? 'PARTIAL' : 'SUCCESS';
+    const task = await this.prisma.asyncTask.update({
+      where: { id },
+      data: { items, succeeded, failed, skipped, status, cancelRequested: cancel, finishedAt: pending ? null : new Date() },
+    });
+    return this.presentTask(task);
+  }
+
+  private presentTask<T extends { total: number; succeeded: number; failed: number; skipped: number; status: string }>(task: T) {
+    const done = task.succeeded + task.failed + task.skipped;
+    return { ...task, progress: task.total ? Math.round((done / task.total) * 100) : 0 };
   }
 }
 

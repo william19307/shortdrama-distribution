@@ -179,6 +179,12 @@ export const dramaSelectionSchema = z.object({
   ids: z.array(z.string()).max(5000).optional(),
 });
 
+export const taskCreateSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  defer: z.boolean().optional(),
+  items: z.array(z.object({ key: z.string().trim().min(1).max(80), failOnce: z.boolean().optional() })).min(1).max(200),
+});
+
 export const folderPreviewSchema = z.object({
   paths: z.array(z.string().trim().min(1).max(300)).min(1).max(5000),
 });

@@ -48,7 +48,7 @@ const STAFF_ITEMS: Item[] = [
   { key: '/users', icon: <TeamOutlined />, label: '员工账号', roles: ['ADMIN'] },
   { key: '/settings', icon: <SettingOutlined />, label: '全局参数', roles: ['ADMIN'] },
   { key: '/audit', icon: <FileSearchOutlined />, label: '操作日志', roles: ['ADMIN'] },
-  { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务', roles: ['OPS', 'OPS_MANAGER', 'ADMIN', 'FINANCE', 'BD'] },
+  { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务中心', roles: ['OPS', 'OPS_MANAGER', 'ADMIN', 'FINANCE', 'BD'] },
 ];
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
