@@ -1,0 +1,83 @@
+/* 短剧发行 · Cinematic Design Tokens — CSS 变量
+   默认深色；<html data-theme="light"> 切浅色；<html data-density="compact"> 切后台紧凑密度。与 tokens.ts 对应。 */
+:root, [data-theme="dark"] {
+  color-scheme: dark;
+  --ds-red: #D6153C; --ds-red-hover: #E8204A; --ds-red-active: #B01030; --ds-red-soft: #FF7B95; --ds-red-deep: #4A0716;
+  --ds-bg: #000; --ds-bg-elevated: #0E0E11; --ds-surface: #121215; --ds-surface-2: #1B1B20; --ds-surface-hover: #202026; --ds-overlay: rgba(0,0,0,.75);
+  --ds-text: #F5F5F7; --ds-text-2: #AEAEB2; --ds-text-3: #86868B; --ds-text-inverse: #000;
+  --ds-border: rgba(255,255,255,.10); --ds-border-strong: rgba(255,255,255,.22);
+  --ds-primary: var(--ds-red); --ds-primary-hover: #E8204A; --ds-primary-active: #B01030; --ds-primary-text: #FF5A7A; --ds-primary-soft: rgba(214,21,60,.16);
+  --ds-success: #46D369; --ds-success-soft: rgba(70,211,105,.14);
+  --ds-warning: #F5A524; --ds-warning-soft: rgba(245,165,36,.14);
+  --ds-error: #FF4D6D; --ds-error-soft: rgba(255,77,109,.14);
+  --ds-info: #4C9AFF; --ds-info-soft: rgba(76,154,255,.14);
+  --ds-neutral-soft: rgba(255,255,255,.08);
+  --ds-focus-ring: rgba(214,21,60,.55);
+  --ds-shadow-sm: 0 1px 2px rgba(0,0,0,.6);
+  --ds-shadow-md: 0 12px 32px -12px rgba(0,0,0,.8);
+  --ds-shadow-lg: 0 30px 60px -10px #000, 0 0 0 1px rgba(255,255,255,.12);
+  --ds-shadow-modal: 0 40px 120px #000;
+  --ds-glow: 0 10px 40px -10px rgba(214,21,60,.7);
+  --ds-glow-strong: 0 0 80px rgba(214,21,60,.7);
+  --ds-grad-text-hero: linear-gradient(92deg,#fff 10%,#ff7b95 55%,#D6153C);
+  --ds-grad-text-stat: linear-gradient(180deg,#fff,#9a9aa0);
+  --ds-grad-bento: linear-gradient(160deg,#141418,#0a0a0c);
+  --ds-grad-spotlight: radial-gradient(60% 80% at 50% 0%,rgba(214,21,60,.14),transparent 70%);
+  --ds-grad-glow-orb: radial-gradient(circle,rgba(214,21,60,.28),transparent 60%);
+  --ds-grad-bar: linear-gradient(#ff4a6e,rgba(214,21,60,.15));
+  --ds-grad-avatar: linear-gradient(135deg,#D6153C,#4A0716);
+  --ds-chart-grid: rgba(255,255,255,.08);
+}
+[data-theme="light"] {
+  color-scheme: light;
+  --ds-bg: #F5F5F7; --ds-bg-elevated: #FFF; --ds-surface: #FFF; --ds-surface-2: #F0F0F3; --ds-surface-hover: #EBEBEF; --ds-overlay: rgba(20,20,24,.45);
+  --ds-text: #0B0B0D; --ds-text-2: #55555B; --ds-text-3: #86868B; --ds-text-inverse: #FFF;
+  --ds-border: rgba(0,0,0,.09); --ds-border-strong: rgba(0,0,0,.20);
+  --ds-primary-hover: #C0102F; --ds-primary-active: #9E0C27; --ds-primary-text: #C0102F; --ds-primary-soft: rgba(214,21,60,.08);
+  --ds-success: #1E9E4A; --ds-success-soft: rgba(30,158,74,.10);
+  --ds-warning: #B76E00; --ds-warning-soft: rgba(245,165,36,.14);
+  --ds-error: #D92D4B; --ds-error-soft: rgba(217,45,75,.09);
+  --ds-info: #1A6FE0; --ds-info-soft: rgba(26,111,224,.09);
+  --ds-neutral-soft: rgba(0,0,0,.05);
+  --ds-focus-ring: rgba(214,21,60,.35);
+  --ds-shadow-sm: 0 1px 2px rgba(0,0,0,.06);
+  --ds-shadow-md: 0 8px 24px -8px rgba(0,0,0,.14);
+  --ds-shadow-lg: 0 24px 48px -12px rgba(0,0,0,.22), 0 0 0 1px rgba(0,0,0,.04);
+  --ds-shadow-modal: 0 30px 80px rgba(0,0,0,.25);
+  --ds-glow: 0 10px 30px -10px rgba(214,21,60,.55);
+  --ds-glow-strong: 0 0 50px rgba(214,21,60,.35);
+  --ds-grad-text-hero: linear-gradient(92deg,#0B0B0D 10%,#C0102F 70%,#D6153C);
+  --ds-grad-text-stat: linear-gradient(180deg,#0B0B0D,#55555B);
+  --ds-grad-bento: linear-gradient(160deg,#ffffff,#f3f3f6);
+  --ds-grad-spotlight: radial-gradient(60% 80% at 50% 0%,rgba(214,21,60,.08),transparent 70%);
+  --ds-chart-grid: rgba(0,0,0,.06);
+}
+:root {
+  --ds-font: "Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --ds-font-mono: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --ds-fs-display: clamp(52px,9.2vw,148px); --ds-lh-display: .92; --ds-ls-display: -.055em;
+  --ds-fs-display-sm: clamp(40px,5.6vw,84px); --ds-lh-display-sm: .98; --ds-ls-display-sm: -.05em;
+  --ds-fs-h1: clamp(34px,4.6vw,68px); --ds-lh-h1: 1.02; --ds-ls-h1: -.045em;
+  --ds-fs-h2: 36px; --ds-lh-h2: 1.05; --ds-ls-h2: -.04em;
+  --ds-fs-h3: 26px; --ds-lh-h3: 1.12; --ds-ls-h3: -.035em;
+  --ds-fs-h4: 22px; --ds-lh-h4: 1.2; --ds-ls-h4: -.025em;
+  --ds-fs-lede: clamp(17px,1.5vw,21px); --ds-lh-lede: 1.5; --ds-ls-lede: -.015em;
+  --ds-fs-body: 16px; --ds-lh-body: 1.55; --ds-ls-body: -.011em;
+  --ds-fs-body-sm: 14px; --ds-lh-body-sm: 1.5;
+  --ds-fs-caption: 12.5px; --ds-lh-caption: 1.4;
+  --ds-fs-eyebrow: 13px; --ds-ls-eyebrow: .14em;
+  --ds-fs-stat: clamp(48px,6.4vw,104px); --ds-ls-stat: -.06em;
+  --ds-space-1: 4px; --ds-space-2: 8px; --ds-space-3: 12px; --ds-space-4: 16px; --ds-space-5: 20px; --ds-space-6: 24px;
+  --ds-space-8: 32px; --ds-space-10: 40px; --ds-space-12: 48px; --ds-space-14: 56px; --ds-space-18: 72px; --ds-space-24: 96px; --ds-space-35: 140px;
+  --ds-max-width: 1360px; --ds-gutter: 56px; --ds-grid-gap: 16px; --ds-nav-h: 68px; --ds-section-y: 140px;
+  --ds-radius-xs: 4px; --ds-radius-sm: 8px; --ds-radius-md: 10px; --ds-radius-lg: 14px; --ds-radius-xl: 24px; --ds-radius-xxl: 28px; --ds-radius-pill: 999px;
+  --ds-ease-out: cubic-bezier(.22,1,.36,1); --ds-ease-in-out: cubic-bezier(.65,0,.35,1); --ds-ease-standard: cubic-bezier(.4,0,.2,1);
+  --ds-dur-instant: 120ms; --ds-dur-fast: 200ms; --ds-dur-base: 300ms; --ds-dur-slow: 450ms; --ds-dur-reveal: 900ms; --ds-dur-hero: 1100ms;
+  /* density (comfortable default) */
+  --ds-control-h: 40px; --ds-fs-ui: 14px; --ds-cell-y: 16px; --ds-cell-x: 16px; --ds-card-pad: 24px;
+}
+[data-density="compact"] { --ds-control-h: 30px; --ds-fs-ui: 13px; --ds-cell-y: 8px; --ds-cell-x: 12px; --ds-card-pad: 16px; }
+@media (max-width: 720px) { :root { --ds-gutter: 22px; --ds-section-y: 96px; } }
+@media (prefers-reduced-motion: reduce) { :root { --ds-dur-base: 0ms; --ds-dur-slow: 0ms; --ds-dur-reveal: 0ms; --ds-dur-hero: 0ms; } }
+/* 数字等宽工具类 */
+.ds-num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }

@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# Vite build output (root-level single-file HTML prototypes are kept)
+dist/
+dist-v2/
+
+# macOS
+.DS_Store
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

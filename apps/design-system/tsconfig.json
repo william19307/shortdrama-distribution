@@ -1,0 +1,1 @@
+{"compilerOptions":{"target":"ES2020","module":"ESNext","moduleResolution":"Bundler","jsx":"react-jsx","strict":true,"noEmit":true,"skipLibCheck":true,"lib":["ES2020","DOM"],"esModuleInterop":true,"isolatedModules":true,"noUnusedLocals":true},"include":["tokens.ts","antdTheme.ts","demo/**/*.ts","demo/**/*.tsx"]}
