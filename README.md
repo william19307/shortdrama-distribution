@@ -1,23 +1,133 @@
 # 短剧海外发行管理平台
 
-服务短剧版权方（客户）的海外发行平台：**申请、审核、分成、数据、结算** 一站式管理。本仓库目前包含产品文档，以及三套可独立运行的前端（Vite + React + TypeScript）：运营/客户交互原型、营销站、设计系统（设计令牌与 Ant Design 主题）。
+服务短剧版权方的海外发行工作台：申请、审核、分成、每日数据、人民币结算。平台不向 ReelShort 等海外渠道推送成片，也不做转码、翻译或和海外平台的资金清算。
 
-示例数据仅用于演示，不连接真实后端。
+当前是可本地运行的 MVP，按 `docs/prd/短剧海外发行管理平台-PRD-v0.5.md` 实现。交互参照 `apps/proto-v3`，颜色、圆角、密度和 antd 主题从 `apps/design-system` 读取（`getAntdTheme`）。后台用 compact，客户端用 comfortable。设计系统以后更换图标、动效或思源字体时，改设计系统即可，业务页不写死这些值。
 
-## 目录结构
+## 本地启动
 
-```
-docs/
-  prd/                 产品需求文档（多版本，最新为 v0.5）
-  research/            海外短剧平台版权合作调研
-  reviews/             原型体验走查与修复对照
-apps/
-  proto-v3/            管理端 / 客户端交互原型（Vite + React + TS + antd）
-  marketing-site/      营销站（Vite + React；含 v1 与 v2）
-  design-system/       设计令牌、CSS 变量、antd 主题与组件展示页
+需要 Node.js 20+、pnpm 10、Docker（Postgres 与 MinIO）。
+
+```bash
+docker compose up -d
+cp .env.example .env          # 已有 .env 时跳过；pnpm dev 也会自动复制
+pnpm install
+pnpm dev                      # 迁移、种子、API :3000、网页 :5173
 ```
 
-可直接分享的单文件 HTML（脚本与样式已打进一个文件，不依赖 `node_modules`）放在各应用目录下，不在 `dist/` 里：
+只想分开启动时：
+
+```bash
+docker compose up -d
+pnpm db:setup                 # 同步 .env、编译 shared、prisma generate、migrate、seed
+pnpm dev:api                  # http://localhost:3000/api/health
+pnpm dev:web                  # http://localhost:5173
+```
+
+没有 Docker 时，把 `.env` 里的 `DATABASE_URL` 指到本机 Postgres 16，并执行 `CREATE EXTENSION pg_trgm;`。对象存储可临时改成 `STORAGE_DRIVER=memory`（进程内存，重启即丢，只适合开发）。正式本地存储用 MinIO：控制台 http://localhost:9001 ，账号 `minio` / `minio123456`，桶名 `shortform`。
+
+网页通过 Vite 把 `/api` 代理到 `VITE_API_PROXY`（默认 `http://localhost:3000`）。API 的 CORS 允许 `WEB_ORIGIN`。
+
+### 演示账号
+
+密码都是 `Demo123456`。
+
+| 邮箱 | 角色 |
+|---|---|
+| client@xinghe.example | 客户 · 星河影业（已认证，负责人林晓） |
+| client@qingning.example | 客户 · 青柠文化（认证审核中） |
+| ops@studio.example | 运营 · 林晓 |
+| bd@studio.example | 商务 · 陈宇 |
+| finance@studio.example | 财务 · 赵倩 |
+| admin@studio.example | 管理员 · 周岚 |
+
+开发环境下登录页会列出这些账号。
+
+### 检查
+
+```bash
+pnpm typecheck
+pnpm test          # API 集成测试，使用库 shortform_test 与内存存储
+```
+
+测试库需要事先建好：`CREATE DATABASE shortform_test;` 并且 `CREATE EXTENSION pg_trgm;`。`pnpm test` 会对该库执行 `prisma migrate deploy`。
+
+## 仓库结构
+
+```
+apps/web          客户与后台（React + TypeScript + Vite + antd）
+apps/api          NestJS + Prisma
+packages/shared   枚举、中文文案、zod 校验
+docker-compose.yml  Postgres 16、MinIO
+docs/prd          需求，以 v0.5 为准
+docs/research     32 字段日报模板与截图口径
+apps/proto-v3     交互原型（不接这套 API）
+apps/marketing-site
+apps/design-system
+```
+
+## 环境变量
+
+全部在 `.env.example`。服务器和云厂商都还没定，不要把密钥写进代码。
+
+| 变量 | 作用 |
+|---|---|
+| `DATABASE_URL` | Postgres |
+| `PORT` / `WEB_ORIGIN` / `JWT_SECRET` | API 端口、网页来源、登录令牌 |
+| `STORAGE_DRIVER` | `s3` 或 `memory` |
+| `S3_ENDPOINT` `S3_REGION` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY` `S3_FORCE_PATH_STYLE` | MinIO 或腾讯云 COS。COS 一般关闭 path style，endpoint 用 `https://cos.<region>.myqcloud.com` |
+
+存储走 `StorageService`：预签名直传、分片、读取和水印图都通过这个接口。换成 COS 只改环境变量。
+
+业务参数不写死在代码里：最低提款额（默认 10000 元）、金额偏差提示、每日数据截止时间，在管理端「全局参数」。平台「昨天 / 前天」在平台名单里配置。结算周期在客户或项目策略上配置。
+
+## 已实现
+
+- 注册登录，角色：客户、运营、商务、财务、管理员。运营只处理自己负责的客户。
+- 企业认证（含主体变更审核期间冻结提款）、收款账户。户名在已认证后必须与企业名一致。
+- 剧目、封面、分集、授权书、版权证明。分集走预签名直传；超过 8MB 且存储为 S3 时分片。列表服务端分页、筛选，剧名有 `pg_trgm` 索引。
+- 发行计划。首发固定为当前启用的 ReelShort、DramaBox、ShortMax、FlexTV、GoodShort，客户不能删。二轮可选手填平台。
+- 抽检审核（8 集及以内全审，否则头尾加中间样本）、驳回、替换、重提。二轮且成片都已通过则跳过审核。
+- 按平台配置保底、超保底、无保底。保底金额和结转说明对客户的接口响应会去掉，不只是页面上隐藏。结转只记在项目策略上，不参与计算。
+- 每日数据手工录入，字段对齐调研文档的 32 项。日期与平台口径不一致时给出提示，不阻断。
+- 截图加水印（暗纹 + 上海时间明文 + 原图短哈希），匹配成功后进入工单。
+- 数据看板、合同申请与列表。
+- 结算单由运营手工填写人民币应结金额，录入人不能复核。不足最低提款额为「未达起提额」，合计达标后可合并申请。发票人工审核，驳回后可重传。打款上传回单。
+
+## 还没做
+
+这些留在后续，不在本次本地 MVP 里：
+
+- 报表 Excel 一键导入、字段映射和别名模糊匹配
+- 元数据 Excel、文件夹与剧集自动匹配
+- 浏览器里的断点续传队列（服务端已有分片和 7 天上传会话）
+- ffprobe 成片探测
+- Redis、Worker、消息队列
+- 到结算周期自动生成结算单（现在是手工生成，周期本身可配置）
+- 汇率外部抓取（现在手工录入）
+- 邮件、短信、手机号登录、OCR
+- 子账号、电子签
+- 回收站和 10 秒撤销、保存视图、拖拽分组
+- 审核超时推送（有预计完成时间和工作台超期计数）
+- 按月分区、深分页 keyset
+- 部署，以及换成真实 COS 之后的生产配置
+
+## 待接入的外部服务
+
+| 服务 | 现在 | 以后 |
+|---|---|---|
+| Postgres | Docker 或本机 | 云数据库，仍用 `DATABASE_URL` |
+| 对象存储 | MinIO | 腾讯云 COS，改 `S3_*` |
+| 汇率 | 手工 | 外部牌价 |
+| 邮件 / 短信 | 无 | 认证、工单、结算通知 |
+| 电子签 / OCR | 无 | 合同与证照 |
+| 成片探测 | 无 | ffprobe |
+| 队列 | 导出记一条已完成任务 | Redis / 队列 Worker |
+| 海外平台接口 | 不推送、不拉取 | 明确不做内容推送；报表导入另做 |
+
+## 原型、营销站、设计系统
+
+这三套是需求阶段的前端，不进 pnpm workspace，避免和产品的依赖锁冲突。单文件 HTML 可直接用浏览器打开：
 
 | 文件 | 内容 |
 |---|---|
@@ -27,80 +137,12 @@ apps/
 | `apps/marketing-site/营销站-v2.html` | 营销站 v2 |
 | `apps/design-system/设计系统.html` | 设计系统展示页 |
 
-`apps/proto-v3/shots/` 为走查截图。`dist/`、`dist-v2/` 与 `node_modules/` 为本地构建产物，已在根目录 `.gitignore` 中忽略。
-
-## 打开预构建 HTML
-
-用浏览器直接打开上述 `.html` 即可，无需安装依赖、无需启动开发服务器。路由使用 Hash，本地 `file://` 打开可用。
-
-示例：
+源码开发：
 
 ```bash
-# macOS
-open "apps/proto-v3/短剧发行平台原型-v3.html"
-
-# Linux
-xdg-open "apps/proto-v3/短剧发行平台原型-v3.html"
+cd apps/proto-v3 && npm install && npm run dev
+cd apps/marketing-site && npm install && npm run dev
+cd apps/design-system && npm install && npm run dev
 ```
 
-也可以把文件拖进浏览器窗口，或把路径发给同事离线查看。
-
-## 本地运行
-
-需要 Node.js 18+（本仓库用 Node 22 验证过）。在对应应用目录执行安装、开发与构建。`npm run build` 会输出到该应用的 `dist/`（营销站 v2 为 `dist-v2/`），**不会覆盖**上面的单文件 HTML。
-
-### 交互原型 `apps/proto-v3`
-
-```bash
-cd apps/proto-v3
-npm install
-npm run dev      # 默认 http://localhost:5173
-npm run build
-```
-
-### 营销站 `apps/marketing-site`
-
-v1（`index.html` + `src/`）：
-
-```bash
-cd apps/marketing-site
-npm install
-npm run dev
-npm run build
-```
-
-v2（`v2/`，配置为 `vite.v2.config.ts`）：
-
-```bash
-cd apps/marketing-site
-npm run dev -- --config vite.v2.config.ts
-npm run build -- --config vite.v2.config.ts
-```
-
-### 设计系统 `apps/design-system`
-
-令牌源文件是 `tokens.ts` / `tokens.css`，antd 主题工厂是 `antdTheme.ts`。展示页源码在 `demo/`。
-
-```bash
-cd apps/design-system
-npm install
-npm run dev
-npm run build
-npm run typecheck
-```
-
-三个应用的 `devDependencies` 都包含 Playwright（截图脚本 `shot.cjs`）。只做页面构建时，可以在安装前设置 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`，跳过浏览器二进制下载。
-
-## PRD 版本
-
-`docs/prd/` 保留需求演进过程，**以 v0.5 为准**：
-
-| 文件 | 说明 |
-|---|---|
-| `短剧海外发行管理平台-PRD.md` | 初稿（文内标为 v1.0；v0.5 变更记录中记为 v0.1，首版误标） |
-| `短剧海外发行管理平台-PRD-v0.2.md` | v0.2 |
-| `短剧海外发行管理平台-PRD-v0.3.md` | v0.3 |
-| `短剧海外发行管理平台-PRD-v0.4.md` | v0.4 |
-| `短剧海外发行管理平台-PRD-v0.5.md` | **当前最新（2026-10-21）** |
-
-v0.5 相对前序版本的重点是规模化：按数百客户、单客户数百部剧、平台总量数千部剧 / 数十万集重审流程，补齐批量上传与发行、审核队列与抽检、报表导入、结算批量处理、异步任务中心，并新增第 6 章「用户端设计原则」。文中 **【已定】** 为业务已拍板，**【暂按默认】** 为沿用默认假设，**【待定】** 仍需拍板。更早版本仅作对照，开发与原型以 v0.5 为准。
+`docs/prd/` 以 v0.5 为准。更早版本只作对照。

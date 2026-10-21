@@ -1,0 +1,488 @@
+import { App, Button, Card, Form, Input, InputNumber, Select, Space, Switch, Table, Tag, Upload } from 'antd';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, SHARE_MODE_LABEL } from '@shortform/shared';
+import { api, qs, uploadFile, type Page } from '../api';
+import { useAuth } from '../auth';
+import { ErrorNote, PageHead, StatusTag, dayText, labelOf } from '../ui';
+
+interface Plan {
+  id: string; code: string; status: string; statusLabel?: string; round: string; rejectSummary?: string | null;
+  drama: { id: string; title: string; code: string };
+  company: { id: string; name: string };
+  platforms: { id: string; platformId: string; platformName: string; listingStatus: string; platformDramaId?: string; listingUrl?: string }[];
+  shares: { platformId: string; mode: string; clientRate: string; overRate?: string | null; guaranteeAmount?: string | null; guaranteeCurrency?: string | null; guaranteePeriodDays?: number | null; reviewStatus: string }[];
+  episodes?: { id: string; no: number; reviewStatus: string; rejectReason?: string | null; fileName?: string | null }[];
+}
+
+export function WorkbenchPage() {
+  const [data, setData] = useState<Record<string, number | { minWithdrawAmount: string; deviationPct: string; syncDeadline: string }> | null>(null);
+  const [error, setError] = useState('');
+  useEffect(() => { api<typeof data>('/workbench').then(setData).catch((err) => setError(err.message)); }, []);
+  const cards: [string, string][] = [
+    ['reviews', '待审发行'],
+    ['shareConfig', '待配分成'],
+    ['shareReview', '分成待复核'],
+    ['entry', '待录入结算'],
+    ['toReview', '结算待复核'],
+    ['invoices', '发票待审'],
+    ['paying', '待打款'],
+    ['pendingShots', '截图待归档'],
+    ['overdue', '已过预计时间'],
+  ];
+  return (
+    <div>
+      <PageHead title="工作台" hint="数字是你职责范围内还没做完的事。" />
+      <ErrorNote error={error} />
+      <div className="stat-row">
+        {cards.map(([key, title]) => <Card key={key} className="ds-stat"><div style={{ color: 'var(--ds-text-3)' }}>{title}</div><b style={{ fontSize: 28 }}>{String(data?.[key] ?? '—')}</b></Card>)}
+      </div>
+    </div>
+  );
+}
+
+export function CompaniesPage() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<Page<Record<string, unknown>> | null>(null);
+  const [detail, setDetail] = useState<Record<string, any> | null>(null);
+  const [q, setQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+  const [staff, setStaff] = useState<{ id: string; name: string }[]>([]);
+  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
+  const load = () => api<Page<Record<string, unknown>>>(`/companies${qs({ q, page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, [q, page]);
+  useEffect(() => { if (id) api<Record<string, any>>(`/companies/${id}`).then(setDetail).catch((err) => setError(err.message)); }, [id]);
+  useEffect(() => { if (user?.role === 'ADMIN') api<Page<{ id: string; name: string; role: string }>>('/admin/users?page=1&pageSize=100').then((res) => setStaff(res.items.filter((item) => item.role === 'OPS'))).catch(() => undefined); }, [user?.role]);
+
+  return (
+    <div>
+      <PageHead title="客户与资质" />
+      <ErrorNote error={error} />
+      <Input.Search allowClear placeholder="企业名或信用代码" style={{ width: 280, marginBottom: 12 }} onSearch={(value) => { setPage(1); setQ(value); }} />
+      <Table
+        rowKey="id"
+        dataSource={(rows?.items || []) as any[]}
+        pagination={{ current: page, pageSize: 20, total: rows?.total || 0, onChange: setPage, showSizeChanger: false }}
+        onRow={(row) => ({ onClick: () => nav(`/companies/${row.id}`), style: { cursor: 'pointer' } })}
+        columns={[
+          { title: '企业', dataIndex: 'name' },
+          { title: '认证', dataIndex: 'certStatus', render: (value) => <StatusTag status={value} /> },
+          { title: '负责人', dataIndex: ['owner', 'name'], render: (value) => value || '未分配' },
+          { title: '剧目', dataIndex: ['_count', 'dramas'] },
+        ]}
+      />
+      {detail ? (
+        <Card title={detail.name} style={{ marginTop: 16 }} extra={<StatusTag status={detail.certStatus} />}>
+          <p>信用代码 {detail.creditCode || '—'} · 法人 {detail.legalPerson || '—'} · 联系人 {detail.contactName || '—'} {detail.contactPhone || ''}</p>
+          {detail.certRejectReason ? <p>驳回原因：{detail.certRejectReason}</p> : null}
+          {finance && ['PENDING', 'CHANGE_PENDING'].includes(detail.certStatus) ? (
+            <Space>
+              <Button type="primary" onClick={async () => { await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: true } }); message.success('已通过'); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); load(); }}>通过认证</Button>
+              <Button danger onClick={async () => { const reason = window.prompt('驳回原因') || ''; if (!reason) return; await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: false, reason } }); load(); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); }}>驳回</Button>
+            </Space>
+          ) : null}
+          {user?.role === 'ADMIN' ? (
+            <div style={{ marginTop: 12 }}>
+              <Select
+                style={{ width: 240 }}
+                placeholder="指定负责运营"
+                options={staff.map((item) => ({ value: item.id, label: item.name }))}
+                onChange={async (ownerId) => { await api(`/companies/${detail.id}/owner`, { method: 'PATCH', json: { ownerId } }); message.success('已更新负责人'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
+              />
+            </div>
+          ) : null}
+          {user && ['OPS', 'FINANCE', 'ADMIN'].includes(user.role) ? <PolicyForm companyId={detail.id} /> : null}
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+function PolicyForm({ companyId }: { companyId: string }) {
+  const { message } = App.useApp();
+  return (
+    <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => {
+      try {
+        await api(`/companies/${companyId}/settlement-policy`, { method: 'PUT', json: values });
+        message.success('结算周期已保存');
+      } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+    }}>
+      <Form.Item name="cycleType" initialValue="MONTH" label="结算周期"><Select style={{ width: 140 }} options={[{ value: 'MONTH', label: '自然月' }, { value: 'QUARTER', label: '季度' }, { value: 'CUSTOM_DAYS', label: '自定义天数' }]} /></Form.Item>
+      <Form.Item name="customDays"><InputNumber placeholder="天数" min={1} /></Form.Item>
+      <Form.Item name="anchorDate" rules={[{ required: true }]}><Input placeholder="锚点 YYYY-MM-DD" /></Form.Item>
+      <Form.Item name="note"><Input placeholder="说明" /></Form.Item>
+      <Button htmlType="submit">保存周期</Button>
+    </Form>
+  );
+}
+
+export function ReviewsPage() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<Page<Plan> | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [status, setStatus] = useState<string>();
+  const [reason, setReason] = useState('画面或字幕需要修改');
+  const [error, setError] = useState('');
+  const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status })}`).then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, [status]);
+  useEffect(() => { if (id) api<Plan>(`/plans/${id}`).then(setPlan).catch((err) => setError(err.message)); }, [id]);
+
+  const refresh = async () => { if (id) setPlan(await api<Plan>(`/plans/${id}`)); load(); };
+
+  return (
+    <div>
+      <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。" />
+      <ErrorNote error={error} />
+      <Select allowClear placeholder="状态" style={{ width: 180, marginBottom: 12 }} value={status} onChange={setStatus} options={['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION', 'SHARE_CONFIG'].map((value) => ({ value, label: labelOf(value) }))} />
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} onRow={(row) => ({ onClick: () => nav(`/reviews/${row.id}`), style: { cursor: 'pointer' } })} columns={[
+        { title: '单号', dataIndex: 'code' },
+        { title: '剧', dataIndex: ['drama', 'title'] },
+        { title: '客户', dataIndex: ['company', 'name'] },
+        { title: '轮次', dataIndex: 'round', render: labelOf },
+        { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
+      ]} />
+      {plan ? (
+        <Card title={`${plan.drama.title} · ${plan.code}`} style={{ marginTop: 16 }} extra={<StatusTag status={plan.status} />}>
+          <Space wrap>
+            {['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button type="primary" onClick={async () => { await api(`/reviews/${plan.id}/open`, { method: 'POST' }); refresh(); }}>开始审核</Button> : null}
+            {plan.status === 'IN_REVIEW' ? <Button onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
+            {plan.status === 'IN_REVIEW' ? <Button type="primary" onClick={async () => { try { await api(`/reviews/${plan.id}/finish`, { method: 'POST' }); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '还不能结束'); } }}>提交审核结果</Button> : null}
+          </Space>
+          {plan.rejectSummary ? <pre>{plan.rejectSummary}</pre> : null}
+          <Table style={{ marginTop: 12 }} rowKey="id" pagination={false} dataSource={plan.episodes || []} columns={[
+            { title: '集', dataIndex: 'no', width: 70 },
+            { title: '文件', dataIndex: 'fileName' },
+            { title: '状态', dataIndex: 'reviewStatus', render: (value) => <StatusTag status={value} /> },
+            { title: '原因', dataIndex: 'rejectReason' },
+            {
+              title: '',
+              render: (_, row) => ['PENDING', 'REPLACED'].includes(row.reviewStatus) && plan.status === 'IN_REVIEW' ? (
+                <Space>
+                  <Button size="small" type="primary" onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'APPROVED' } }); refresh(); }}>通过</Button>
+                  <Button size="small" danger onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'REJECTED', reason } }); refresh(); }}>驳回</Button>
+                </Space>
+              ) : null,
+            },
+          ]} />
+          <Input style={{ marginTop: 8, maxWidth: 420 }} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="驳回原因" />
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+export function SharesPage() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
+  const [rows, setRows] = useState<Page<Plan> | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
+  const [draft, setDraft] = useState<Record<string, any>>({});
+  const [error, setError] = useState('');
+  const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status: finance && user?.role === 'FINANCE' ? 'SHARE_REVIEW' : undefined })}`).then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, [finance, user?.role]);
+  useEffect(() => {
+    if (!id) return;
+    api<Plan>(`/plans/${id}`).then((row) => {
+      setPlan(row);
+      const next: Record<string, any> = {};
+      row.platforms.forEach((item) => {
+        const share = row.shares.find((entry) => entry.platformId === item.platformId);
+        next[item.platformId] = { mode: share?.mode || 'NO_MG', clientRate: share ? String(share.clientRate) : '50', overRate: share?.overRate ? String(share.overRate) : '', guaranteeAmount: share?.guaranteeAmount ? String(share.guaranteeAmount) : '', guaranteeCurrency: share?.guaranteeCurrency || 'USD', guaranteePeriodDays: share?.guaranteePeriodDays || undefined };
+      });
+      setDraft(next);
+    }).catch((err) => setError(err.message));
+  }, [id]);
+
+  return (
+    <div>
+      <PageHead title="分成与上架" hint="保底金额只在内部填写，客户看到的是分成比例。结转按项目记一句话，不参与金额计算。" />
+      <ErrorNote error={error} />
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} onRow={(row) => ({ onClick: () => nav(`/shares/${row.id}`), style: { cursor: 'pointer' } })} columns={[
+        { title: '单号', dataIndex: 'code' },
+        { title: '剧', dataIndex: ['drama', 'title'] },
+        { title: '客户', dataIndex: ['company', 'name'] },
+        { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
+      ]} />
+      {plan ? (
+        <Card title={plan.drama.title} style={{ marginTop: 16 }}>
+          {plan.platforms.map((item) => {
+            const row = draft[item.platformId] || { mode: 'NO_MG', clientRate: '50' };
+            const set = (key: string, value: unknown) => setDraft({ ...draft, [item.platformId]: { ...row, [key]: value } });
+            return (
+              <Space key={item.platformId} wrap style={{ display: 'flex', marginBottom: 8 }}>
+                <b style={{ width: 120 }}>{item.platformName}</b>
+                <Select style={{ width: 120 }} value={row.mode} onChange={(value) => set('mode', value)} options={Object.entries(SHARE_MODE_LABEL).map(([value, label]) => ({ value, label }))} />
+                <Input style={{ width: 100 }} value={row.clientRate} onChange={(event) => set('clientRate', event.target.value)} addonAfter="%" />
+                {row.mode === 'MG_OVER' ? <Input style={{ width: 120 }} placeholder="超出比例" value={row.overRate} onChange={(event) => set('overRate', event.target.value)} /> : null}
+                {row.mode !== 'NO_MG' ? <Input style={{ width: 140 }} placeholder="保底金额" value={row.guaranteeAmount} onChange={(event) => set('guaranteeAmount', event.target.value)} /> : null}
+                {row.mode !== 'NO_MG' ? <Input style={{ width: 80 }} value={row.guaranteeCurrency} onChange={(event) => set('guaranteeCurrency', event.target.value)} /> : null}
+                <Tag>{labelOf(item.listingStatus)}</Tag>
+                {['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(plan.status) ? (
+                  <Select style={{ width: 140 }} placeholder="上架结果" options={Object.keys(LISTING_LABEL).map((value) => ({ value, label: labelOf(value) }))} onChange={async (status) => { await api(`/listings/${item.id}`, { method: 'PATCH', json: { status } }); message.success('上架结果已更新'); const next = await api<Plan>(`/plans/${plan.id}`); setPlan(next); }} />
+                ) : null}
+              </Space>
+            );
+          })}
+          {['SHARE_CONFIG', 'SHARE_REVIEW'].includes(plan.status) && user?.role !== 'FINANCE' ? (
+            <Button type="primary" onClick={async () => {
+              try {
+                const items = plan.platforms.map((item) => {
+                  const row = draft[item.platformId];
+                  return { platformId: item.platformId, mode: row.mode, clientRate: String(row.clientRate), overRate: row.overRate || undefined, guaranteeAmount: row.guaranteeAmount || undefined, guaranteeCurrency: row.guaranteeCurrency, guaranteePeriodDays: row.guaranteePeriodDays };
+                });
+                setPlan(await api(`/plans/${plan.id}/shares`, { method: 'PUT', json: { items } }));
+                message.success('已提交分成复核');
+                load();
+              } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+            }}>提交分成</Button>
+          ) : null}
+          {plan.status === 'SHARE_REVIEW' && finance ? (
+            <Space>
+              <Button type="primary" onClick={async () => { try { setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
+              <Button danger onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
+            </Space>
+          ) : null}
+          <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => {
+            try { await api(`/plans/${plan.id}/settlement-policy`, { method: 'PUT', json: values }); message.success('项目结算说明已保存'); }
+            catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+          }}>
+            <Form.Item name="cycleType" initialValue="MONTH"><Select style={{ width: 120 }} options={[{ value: 'MONTH', label: '自然月' }, { value: 'QUARTER', label: '季度' }, { value: 'CUSTOM_DAYS', label: '自定义' }]} /></Form.Item>
+            <Form.Item name="anchorDate" rules={[{ required: true }]}><Input placeholder="锚点日期" /></Form.Item>
+            <Form.Item name="carryoverNote"><Input placeholder="结转说明（仅内部）" style={{ width: 240 }} /></Form.Item>
+            <Button htmlType="submit">保存项目策略</Button>
+          </Form>
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+export function DailyPage() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<Page<any> | null>(null);
+  const [platforms, setPlatforms] = useState<any[]>([]);
+  const [dramas, setDramas] = useState<any[]>([]);
+  const [expect, setExpect] = useState<any[]>([]);
+  const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const load = () => api<Page<any>>(`/daily-stats${qs({ page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, [page]);
+  useEffect(() => {
+    api<any[]>('/platforms').then(setPlatforms).catch(() => undefined);
+    api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)).catch(() => undefined);
+    api<any[]>('/sync-expectations').then(setExpect).catch(() => undefined);
+  }, []);
+
+  return (
+    <div>
+      <PageHead title="每日数据" hint="手工录入。每个平台要哪一天的数，由平台配置决定。草稿可以先存，复核前需要关联防伪截图。录入人不能复核自己的记录。" />
+      <ErrorNote error={error} />
+      <Space wrap style={{ marginBottom: 12 }}>{expect.map((item) => <Tag key={item.id}>{item.name} · {item.asOfLabel}</Tag>)}</Space>
+      <Form layout="vertical" style={{ maxWidth: 880 }} onFinish={async (values) => {
+        try {
+          const saved = await api<any>('/daily-stats', { method: 'POST', json: { ...values, uniqueViewers: values.uniqueViewers ?? undefined, paidUnlocks: values.paidUnlocks ?? undefined } });
+          message.success(saved.lagWarning || '已保存为草稿');
+          load();
+        } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+      }}>
+        <Space wrap align="start">
+          <Form.Item name="platformId" label="平台" rules={[{ required: true }]}><Select style={{ width: 180 }} options={platforms.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
+          <Form.Item name="dramaId" label="剧目" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" style={{ width: 220 }} options={dramas.map((item) => ({ value: item.id, label: `${item.code} ${item.title}` }))} /></Form.Item>
+          <Form.Item name="statDate" label="数据日期" rules={[{ required: true }]}><Input placeholder="YYYY-MM-DD" /></Form.Item>
+          <Form.Item name="statTimezone" label="统计时区" initialValue="America/Los_Angeles" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="titleLocal" label="平台标题" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="language" label="语种" initialValue="英语" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="territory" label="地区"><Input /></Form.Item>
+          <Form.Item name="contractCode" label="合同编号"><Input /></Form.Item>
+          <Form.Item name="platformDramaId" label="平台剧目 ID"><Input /></Form.Item>
+          <Form.Item name="episodesOnline" label="已上线集数" rules={[{ required: true }]}><InputNumber min={0} /></Form.Item>
+          <Form.Item name="views" label="播放量" rules={[{ required: true }]}><InputNumber min={0} /></Form.Item>
+          <Form.Item name="viewMetricDef" label="播放口径" initialValue="平台后台播放次数" rules={[{ required: true }]}><Input /></Form.Item>
+          <Form.Item name="uniqueViewers" label="去重人数"><InputNumber min={0} /></Form.Item>
+          <Form.Item name="paidUnlocks" label="付费解锁"><InputNumber min={0} /></Form.Item>
+          <Form.Item name="grossRevenue" label="毛收入"><Input /></Form.Item>
+          <Form.Item name="netRevenue" label="净收入"><Input /></Form.Item>
+          <Form.Item name="currency" label="币种" initialValue="USD" rules={[{ required: true }]}><Input style={{ width: 80 }} /></Form.Item>
+          <Form.Item name="shareRate" label="分成比例"><Input /></Form.Item>
+          <Form.Item name="mgAmount" label="保底（内部）"><Input /></Form.Item>
+          <Form.Item name="mgRecouped" label="已抵扣保底（内部）"><Input /></Form.Item>
+          <Form.Item name="revenueShareDue" label="公式应分（内部）"><Input /></Form.Item>
+          <Form.Item name="dealType" label="合作类型" initialValue="MG_SHARE" rules={[{ required: true }]}><Select style={{ width: 140 }} options={Object.entries(DEAL_TYPE_LABEL).map(([value, label]) => ({ value, label }))} /></Form.Item>
+          <Form.Item name="dataSource" label="来源" initialValue="SCREENSHOT" rules={[{ required: true }]}><Select style={{ width: 140 }} options={Object.entries(DATA_SOURCE_LABEL).map(([value, label]) => ({ value, label }))} /></Form.Item>
+          <Form.Item name="watermarkId" label="截图编号"><Input placeholder="关联后才能复核" /></Form.Item>
+          <Form.Item name="anomalyNote" label="异常说明"><Input /></Form.Item>
+        </Space>
+        <Button type="primary" htmlType="submit">保存草稿</Button>
+      </Form>
+      <Table style={{ marginTop: 16 }} rowKey="id" dataSource={rows?.items || []} pagination={{ current: page, pageSize: 20, total: rows?.total || 0, onChange: setPage, showSizeChanger: false }} columns={[
+        { title: '日期', dataIndex: 'statDate', render: dayText },
+        { title: '平台', dataIndex: ['platform', 'name'] },
+        { title: '剧', dataIndex: ['drama', 'title'] },
+        { title: '播放', dataIndex: 'views' },
+        { title: '净收入', dataIndex: 'netRevenue', render: (value, row) => value ? `${value} ${row.currency}` : '—' },
+        { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
+        { title: '提示', dataIndex: 'lagWarning' },
+        { title: '', render: (_, row) => <Space><Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/review`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有复核'); } }}>复核</Button><Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/lock`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有锁定'); } }}>锁定</Button></Space> },
+      ]} />
+    </div>
+  );
+}
+
+export function WatermarksPage() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<any[]>([]);
+  const [platforms, setPlatforms] = useState<any[]>([]);
+  const [dramas, setDramas] = useState<any[]>([]);
+  const [form, setForm] = useState({ dramaId: '', platformId: '', shotDate: '', kind: 'DATA', filename: '' });
+  const [error, setError] = useState('');
+  const load = () => api<any[]>('/watermarks').then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); api<any[]>('/platforms').then(setPlatforms); api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)); }, []);
+
+  return (
+    <div>
+      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人和上海时间。成功匹配的截图并进当天的工单。" />
+      <ErrorNote error={error} />
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Select style={{ width: 220 }} placeholder="剧" value={form.dramaId || undefined} onChange={(dramaId) => setForm({ ...form, dramaId })} options={dramas.map((item) => ({ value: item.id, label: item.title }))} />
+        <Select style={{ width: 160 }} placeholder="平台" value={form.platformId || undefined} onChange={(platformId) => setForm({ ...form, platformId })} options={platforms.map((item) => ({ value: item.id, label: item.name }))} />
+        <Input style={{ width: 140 }} placeholder="日期" value={form.shotDate} onChange={(event) => setForm({ ...form, shotDate: event.target.value })} />
+        <Select style={{ width: 120 }} value={form.kind} onChange={(kind) => setForm({ ...form, kind })} options={[{ value: 'DATA', label: '数据' }, { value: 'LISTING', label: '上架' }, { value: 'DELIST', label: '下架' }]} />
+        <Input style={{ width: 220 }} placeholder="原文件名，用于自动匹配" value={form.filename} onChange={(event) => setForm({ ...form, filename: event.target.value })} />
+        <Upload showUploadList={false} beforeUpload={async (file) => {
+          try {
+            const drama = dramas.find((item) => item.id === form.dramaId);
+            const uploaded = await uploadFile(file, 'WATERMARK_SOURCE', { dramaId: form.dramaId || undefined, companyId: drama?.company?.id });
+            await api('/watermarks', { method: 'POST', json: { fileKey: uploaded.key, dramaId: form.dramaId || undefined, platformId: form.platformId || undefined, shotDate: form.shotDate || undefined, kind: form.kind, filename: form.filename || file.name } });
+            message.success('水印已生成');
+            load();
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有生成'); }
+          return false;
+        }}><Button type="primary">上传并生成水印</Button></Upload>
+      </Space>
+      <div className="poster-grid">
+        {rows.map((shot) => (
+          <Card key={shot.id} cover={shot.url ? <img src={shot.url} alt="" style={{ height: 160, objectFit: 'cover' }} /> : null} size="small">
+            <StatusTag status={shot.status === 'ARCHIVED' ? 'APPROVED' : 'PENDING'} text={shot.status === 'ARCHIVED' ? '已归档' : '待归档'} />
+            <div>{shot.drama?.title || '未匹配剧目'} · {shot.platform?.name || '未匹配平台'}</div>
+            <div style={{ color: 'var(--ds-text-3)' }}>{shot.shortHash} {shot.failReason || ''}</div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PlatformsPage() {
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<any[]>([]);
+  const admin = user?.role === 'ADMIN';
+  const load = () => api<any[]>('/platforms').then(setRows);
+  useEffect(() => { load(); }, []);
+  return (
+    <div>
+      <PageHead title="平台名单" hint="首发五家由管理员开关。数据日是昨天还是前天，也在这里配置。" />
+      <Table rowKey="id" dataSource={rows} pagination={false} columns={[
+        { title: '平台', dataIndex: 'name' },
+        { title: '地区', dataIndex: 'region' },
+        { title: '数据日', dataIndex: 'syncLag', render: (value, row) => admin ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); load(); }} /> : labelOf(value) },
+        { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={!admin && user?.role !== 'OPS' && user?.role !== 'BD'} onChange={async (enabled) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Switch checked={value} disabled={!admin} onChange={async (firstBatch) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+      ]} />
+      <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api('/platforms', { method: 'POST', json: values }); message.success('已添加'); load(); }}>
+        <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="新平台名称" /></Form.Item>
+        <Form.Item name="region"><Input placeholder="地区" /></Form.Item>
+        <Form.Item name="syncLag" initialValue="T1"><Select options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} /></Form.Item>
+        <Button htmlType="submit">添加平台</Button>
+      </Form>
+    </div>
+  );
+}
+
+export function UsersPage() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<Page<any> | null>(null);
+  const load = () => api<Page<any>>('/admin/users?page=1&pageSize=50').then(setRows);
+  useEffect(() => { load(); }, []);
+  return (
+    <div>
+      <PageHead title="员工账号" hint="客户从注册进入，这里只建运营、商务、财务和管理员。" />
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
+        { title: '姓名', dataIndex: 'name' },
+        { title: '邮箱', dataIndex: 'email' },
+        { title: '角色', dataIndex: 'role', render: labelOf },
+        { title: '停用', dataIndex: 'disabled', render: (value, row) => <Switch checked={value} onChange={async (disabled) => { await api(`/admin/users/${row.id}`, { method: 'PATCH', json: { disabled } }); load(); }} /> },
+      ]} />
+      <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { try { await api('/admin/users', { method: 'POST', json: values }); message.success('已创建'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有创建'); } }}>
+        <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="姓名" /></Form.Item>
+        <Form.Item name="email" rules={[{ required: true }]}><Input placeholder="邮箱" /></Form.Item>
+        <Form.Item name="password" rules={[{ required: true, min: 8 }]}><Input.Password placeholder="密码" /></Form.Item>
+        <Form.Item name="role" initialValue="OPS"><Select options={['OPS', 'BD', 'FINANCE', 'ADMIN'].map((value) => ({ value, label: labelOf(value) }))} /></Form.Item>
+        <Button htmlType="submit" type="primary">创建</Button>
+      </Form>
+    </div>
+  );
+}
+
+export function SettingsPage() {
+  const { user } = useAuth();
+  const { message } = App.useApp();
+  const [values, setValues] = useState<any>(null);
+  useEffect(() => { api('/admin/settings').then(setValues); }, []);
+  const admin = user?.role === 'ADMIN';
+  return (
+    <div>
+      <PageHead title="全局参数" hint="最低提款额、偏差提示和每天数据截止时间。" />
+      {values ? (
+        <Form layout="vertical" style={{ maxWidth: 420 }} initialValues={values} onFinish={async (next) => { try { setValues(await api('/admin/settings', { method: 'PUT', json: next })); message.success('已保存'); } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); } }}>
+          <Form.Item name="minWithdrawAmount" label="最低提款额（人民币）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="deviationPct" label="偏差提示阈值（%）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="syncDeadline" label="数据截止（上海时间）"><Input disabled={!admin} /></Form.Item>
+          {admin ? <Button type="primary" htmlType="submit">保存</Button> : null}
+        </Form>
+      ) : null}
+    </div>
+  );
+}
+
+export function AuditPage() {
+  const [rows, setRows] = useState<Page<any> | null>(null);
+  const [page, setPage] = useState(1);
+  useEffect(() => { api<Page<any>>(`/audit-logs${qs({ page, pageSize: 30 })}`).then(setRows); }, [page]);
+  return (
+    <div>
+      <PageHead title="操作日志" />
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={{ current: page, pageSize: 30, total: rows?.total || 0, onChange: setPage, showSizeChanger: false }} columns={[
+        { title: '时间', dataIndex: 'createdAt' },
+        { title: '动作', dataIndex: 'action' },
+        { title: '对象', dataIndex: 'entityType' },
+      ]} />
+    </div>
+  );
+}
+
+export function TasksPage() {
+  const [rows, setRows] = useState<Page<any> | null>(null);
+  useEffect(() => { api<Page<any>>('/tasks?page=1&pageSize=30').then(setRows); }, []);
+  return (
+    <div>
+      <PageHead title="任务" hint="导出等已经做完的任务记在这里。定时结算和报表导入还没有接上。" />
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
+        { title: '名称', dataIndex: 'name' },
+        { title: '类型', dataIndex: 'type' },
+        { title: '状态', dataIndex: 'status' },
+        { title: '成功', dataIndex: 'succeeded' },
+      ]} />
+    </div>
+  );
+}
+
