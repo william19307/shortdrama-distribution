@@ -281,7 +281,9 @@ model Platform {
   firstBatch Boolean  @default(false)
   sort       Int      @default(0)
   syncMode   SyncMode @default(MANUAL)
-  syncLag    SyncLag  @default(T1)
+  syncLag            SyncLag   @default(T1)
+  syncLagPending     SyncLag?
+  syncLagEffectiveOn DateTime? @db.Date
   contact    String   @default("")
   color      String   @default("#86868B")
   proposed   Boolean  @default(false)
@@ -296,6 +298,7 @@ model Platform {
   syncTasks     SyncTask[]
   importTemplates ImportFieldTemplate[]
   dramaAliases  DramaAlias[]
+  rosterRequests PlatformRosterRequest[]
 
   @@index([firstBatch, enabled, sort])
 }
@@ -941,6 +944,38 @@ model DramaAlias {
 
   @@unique([platformId, aliasNorm])
   @@index([platformId, platformSeriesId])
+}
+
+model PlatformRosterRequest {
+  id            String    @id @default(cuid())
+  platformId    String
+  platform      Platform  @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  firstBatch    Boolean?
+  enabled       Boolean?
+  status        String    @default("PENDING")
+  requestedById String
+  decidedById   String?
+  createdAt     DateTime  @default(now())
+  decidedAt     DateTime?
+
+  @@index([platformId, status])
+}
+
+model SettlementPolicyVersion {
+  id            String    @id @default(cuid())
+  companyId     String?
+  planId        String?
+  version       Int
+  cycleType     CycleType
+  customDays    Int?
+  anchorDate    DateTime  @db.Date
+  note          String    @default("")
+  carryoverNote String    @default("")
+  createdById   String
+  createdAt     DateTime  @default(now())
+
+  @@index([companyId, version])
+  @@index([planId, version])
 }
 
 model SettlementImportBatch {

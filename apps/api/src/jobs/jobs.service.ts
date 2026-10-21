@@ -114,6 +114,18 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async syncTasks() {
+    const today = day(shanghaiToday());
+    const due = await this.prisma.platform.findMany({
+      where: { syncLagPending: { not: null }, syncLagEffectiveOn: { lte: today } },
+    });
+    for (const platform of due) {
+      if (!platform.syncLagPending) continue;
+      await this.prisma.platform.update({
+        where: { id: platform.id },
+        data: { syncLag: platform.syncLagPending, syncLagPending: null, syncLagEffectiveOn: null },
+      });
+      await this.audit.write(null, 'platform.sync-lag.apply', 'Platform', platform.id, { syncLag: platform.syncLagPending });
+    }
     const platforms = await this.prisma.platform.findMany({ where: { enabled: true }, select: { id: true, code: true, syncLag: true } });
     const created: string[] = [];
     for (const platform of platforms) {

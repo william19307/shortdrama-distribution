@@ -60,6 +60,11 @@ export class AdminController {
     return this.admin.patchPlatform(user, id, body);
   }
 
+  @Post('platforms/roster-requests/:id/confirm')
+  confirmRoster(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.confirmRoster(user, id);
+  }
+
   @Get('audit-logs')
   logs(@CurrentUser() user: AuthUser, @Query(new ZodPipe(logQuery)) query: z.infer<typeof logQuery>) {
     return this.admin.logs(user, query);

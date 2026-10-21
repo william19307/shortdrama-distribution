@@ -19,6 +19,9 @@ import { jobScheduleFromEnv } from '../jobs/jobs.service';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
 
+const REVIEW_LOAD_CAP = 30;
+const OPEN_REVIEW_STATUSES = ['PENDING_REVIEW', 'IN_REVIEW'] as const;
+
 const planInclude = {
   drama: { select: { id: true, code: true, title: true, titleEn: true, companyId: true } },
   company: { select: { id: true, name: true, ownerId: true, bdId: true } },
@@ -79,12 +82,17 @@ export class DistributionService {
 
       const allApproved = readyEpisodes.length > 0 && readyEpisodes.every((episode) => episode.reviewStatus === 'APPROVED');
       const skipReview = input.round === 'SECOND' && allApproved;
-      const assigneeId = drama.company.ownerId;
-      let status: 'SHARE_CONFIG' | 'PENDING_REVIEW' | 'PENDING_ASSIGN' = skipReview ? 'SHARE_CONFIG' : assigneeId ? 'PENDING_REVIEW' : 'PENDING_ASSIGN';
+      const priorDramas = await tx.distributionPlan.count({
+        where: { companyId: drama.companyId, status: { not: 'PRECHECK_FAILED' } },
+      });
+      const fullReview = priorDramas === 0;
+      const assigneeId = skipReview ? drama.company.ownerId : await this.pickAssignee(tx, drama.company);
+      const status: 'SHARE_CONFIG' | 'PENDING_REVIEW' | 'PENDING_ASSIGN' = skipReview ? 'SHARE_CONFIG' : assigneeId ? 'PENDING_REVIEW' : 'PENDING_ASSIGN';
       if (!skipReview) {
         const pool = readyEpisodes.filter((episode) => episode.reviewStatus !== 'APPROVED');
-        const { sampled } = sampleEpisodeNos(pool.map((episode) => episode.no));
-        const sampledSet = new Set(sampled);
+        const sampledSet = fullReview
+          ? new Set(pool.map((episode) => episode.no))
+          : new Set(sampleEpisodeNos(pool.map((episode) => episode.no)).sampled);
         for (const episode of pool) {
           await tx.episode.update({
             where: { id: episode.id },
@@ -100,7 +108,7 @@ export class DistributionService {
           round: input.round,
           status,
           assigneeId,
-          slaDueAt: addBusinessDays(new Date(), status === 'SHARE_CONFIG' ? 1 : 2),
+          slaDueAt: assigneeId ? addBusinessDays(new Date(), status === 'SHARE_CONFIG' ? 1 : 2) : null,
           platforms: {
             create: targets.map((platform) => ({
               platformId: platform.id,
@@ -109,7 +117,7 @@ export class DistributionService {
           },
         },
       });
-      await this.audit.write(user.id, 'plan.create', 'DistributionPlan', plan.id, { round: input.round, status });
+      await this.audit.write(user.id, 'plan.create', 'DistributionPlan', plan.id, { round: input.round, status, assigneeId, fullReview });
       const body = await this.present(tx, plan.id, user);
       await this.saveIdem(tx, user.id, input.idempotencyKey, body);
       return body;
@@ -119,7 +127,7 @@ export class DistributionService {
   async listPlans(user: AuthUser, query: { page: number; pageSize: number; status?: string; companyId?: string }) {
     const where: Prisma.DistributionPlanWhereInput = {};
     if (user.role === 'CLIENT') where.companyId = user.companyId!;
-    else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'OPS') where.OR = [{ assigneeId: user.id }, { company: { ownerId: user.id } }];
     else if (user.role === 'BD') where.company = { bdId: user.id };
     else if (user.role === 'FINANCE') where.status = 'SHARE_REVIEW';
     if (query.status) where.status = query.status as never;
@@ -193,7 +201,10 @@ export class DistributionService {
     const assignee = assertFound(await this.prisma.user.findUnique({ where: { id: assigneeId } }), '运营不存在');
     if (assignee.role !== 'OPS' || assignee.disabled) throw new BadRequestException('只能分派给在岗运营专员');
     const status = plan.status === 'PENDING_ASSIGN' ? 'PENDING_REVIEW' : plan.status;
-    await this.prisma.distributionPlan.update({ where: { id: planId }, data: { assigneeId, status } });
+    await this.prisma.distributionPlan.update({
+      where: { id: planId },
+      data: { assigneeId, status, slaDueAt: plan.slaDueAt ?? addBusinessDays(new Date(), 2) },
+    });
     await this.audit.write(user.id, 'review.assign', 'DistributionPlan', planId, { assigneeId });
     return this.getPlan(user, planId);
   }
@@ -423,8 +434,29 @@ export class DistributionService {
 
   private async must(user: AuthUser, id: string) {
     const plan = assertFound(await this.prisma.distributionPlan.findUnique({ where: { id }, include: planInclude }), '发行申请不存在');
+    if (user.role === 'OPS' && plan.assigneeId === user.id) return plan;
     if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, plan.company);
     return plan;
+  }
+
+  /** 责任运营未满则分给本人；没有责任运营时分给在审量最少且未满 30 的专员。 */
+  private async pickAssignee(tx: Prisma.TransactionClient, company: { ownerId: string | null }) {
+    const open = await tx.distributionPlan.groupBy({
+      by: ['assigneeId'],
+      where: { status: { in: [...OPEN_REVIEW_STATUSES] }, assigneeId: { not: null } },
+      _count: { _all: true },
+    });
+    const loadOf = (id: string) => open.find((row) => row.assigneeId === id)?._count._all ?? 0;
+    if (company.ownerId) {
+      const owner = await tx.user.findUnique({ where: { id: company.ownerId } });
+      if (owner?.role === 'OPS' && !owner.disabled) return loadOf(owner.id) < REVIEW_LOAD_CAP ? owner.id : null;
+    }
+    const specialists = await tx.user.findMany({ where: { role: 'OPS', disabled: false }, select: { id: true } });
+    const choice = specialists
+      .map((row) => ({ id: row.id, load: loadOf(row.id) }))
+      .filter((row) => row.load < REVIEW_LOAD_CAP)
+      .sort((a, b) => a.load - b.load || a.id.localeCompare(b.id))[0];
+    return choice?.id ?? null;
   }
 
   async slaBoard(user: AuthUser) {

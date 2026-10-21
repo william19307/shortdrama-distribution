@@ -120,11 +120,16 @@ export function CompaniesPage() {
 
 function PolicyForm({ companyId }: { companyId: string }) {
   const { message } = App.useApp();
+  const [versions, setVersions] = useState<{ version: number; cycleType: string; planId?: string | null }[]>([]);
+  const load = () => api<{ versions: { version: number; cycleType: string; planId?: string | null }[] }>(`/companies/${companyId}/settlement-policy`).then((res) => setVersions(res.versions || [])).catch(() => undefined);
+  useEffect(() => { load(); }, [companyId]);
+  const latest = versions[0];
   return (
     <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => {
       try {
         await api(`/companies/${companyId}/settlement-policy`, { method: 'PUT', json: values });
         message.success('结算周期已保存');
+        load();
       } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
     }}>
       <Form.Item name="cycleType" initialValue="MONTH" label="结算周期"><Select style={{ width: 140 }} options={[{ value: 'MONTH', label: '自然月' }, { value: 'QUARTER', label: '季度' }, { value: 'CUSTOM_DAYS', label: '自定义天数' }]} /></Form.Item>
@@ -132,6 +137,7 @@ function PolicyForm({ companyId }: { companyId: string }) {
       <Form.Item name="anchorDate" rules={[{ required: true }]}><Input placeholder="锚点 YYYY-MM-DD" /></Form.Item>
       <Form.Item name="note"><Input placeholder="说明" /></Form.Item>
       <Button htmlType="submit">保存周期</Button>
+      {latest ? <span style={{ color: 'var(--ds-text-3)', lineHeight: '32px' }}>当前 v{latest.version}{latest.planId ? '（项目）' : ''}，共 {versions.length} 个版本</span> : null}
     </Form>
   );
 }
@@ -513,23 +519,34 @@ export function WatermarksPage() {
   );
 }
 
+function rosterHint(row: { rosterRequests?: { firstBatch?: boolean | null; enabled?: boolean | null }[] }) {
+  const req = row.rosterRequests?.[0];
+  if (!req) return '';
+  const bits = [];
+  if (req.firstBatch != null) bits.push(req.firstBatch ? '加入首发' : '移出首发');
+  if (req.enabled != null) bits.push(req.enabled ? '启用' : '停用');
+  return bits.join('、');
+}
+
 export function PlatformsPage() {
   const { user } = useAuth();
   const { message } = App.useApp();
   const [rows, setRows] = useState<any[]>([]);
-  const admin = user?.role === 'ADMIN';
+  const viewOnly = user?.role === 'ADMIN';
   const canConfirmFirst = user?.role === 'OPS_MANAGER';
+  const canRequestRoster = user?.role === 'OPS' || canConfirmFirst;
+  const canEditLag = viewOnly || user?.role === 'OPS' || canConfirmFirst;
   const load = () => api<any[]>('/platforms').then(setRows);
   useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="平台名单" hint="首发名单由运营主管或管理员确认。数据日是昨天还是前天，也在这里配置。" />
+      <PageHead title="平台名单" hint="初始首批是 ReelShort、DramaBox、ShortMax、FlexTV、GoodShort。增删首批要主管确认。数据日调整从次日起生效。" />
       <Table rowKey="id" dataSource={rows} pagination={false} columns={[
         { title: '平台', dataIndex: 'name' },
         { title: '地区', dataIndex: 'region' },
-        { title: '数据日', dataIndex: 'syncLag', render: (value, row) => admin ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); load(); }} /> : labelOf(value) },
-        { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={Boolean(row.firstBatch) && !canConfirmFirst} onChange={async (enabled) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
-        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Switch checked={value} disabled={!canConfirmFirst} onChange={async (firstBatch) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+        { title: '数据日', dataIndex: 'syncLag', render: (value, row) => <Space>{canEditLag ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); message.success('数据日次日生效'); load(); }} /> : labelOf(value)}{row.syncLagPending ? <Tag>{labelOf(row.syncLagPending)} 次日生效</Tag> : null}</Space> },
+        { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={viewOnly || (Boolean(row.firstBatch) && !canRequestRoster)} onChange={async (enabled) => { try { const res = await api<any>(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); if (res.pendingConfirmation) message.success('已提交主管确认'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Space><Switch checked={value} disabled={!canRequestRoster} onChange={async (firstBatch) => { try { const res = await api<any>(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); if (res.pendingConfirmation) message.success('已提交主管确认，名单尚未变更'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} />{rosterHint(row) ? <Tag color="gold">待确认：{rosterHint(row)}</Tag> : null}{canConfirmFirst && row.rosterRequests?.[0] ? <Button size="small" onClick={async () => { await api(`/platforms/roster-requests/${row.rosterRequests[0].id}/confirm`, { method: 'POST' }); message.success('已确认'); load(); }}>确认</Button> : null}</Space> },
       ]} />
       <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api('/platforms', { method: 'POST', json: values }); message.success('已添加'); load(); }}>
         <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="新平台名称" /></Form.Item>

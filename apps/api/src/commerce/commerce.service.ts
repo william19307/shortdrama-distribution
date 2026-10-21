@@ -134,17 +134,25 @@ export class CommerceService {
       this.prisma.settlementPolicy.findUnique({ where: { companyId } }),
       this.prisma.projectSettlementPolicy.findMany({ where: { plan: { companyId } }, include: { plan: { select: { id: true, code: true, round: true, drama: { select: { title: true } } } } } }),
     ]);
+    const versions = await this.prisma.settlementPolicyVersion.findMany({
+      where: { OR: [{ companyId }, { planId: { in: plans.map((item) => item.planId) } }] },
+      orderBy: { createdAt: 'desc' },
+    });
     const projects = hidesCommercialTerms(user.role) ? plans.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : plans;
-    return { companyPolicy, projects };
+    return { companyPolicy, projects, versions };
   }
 
   async putCompanyPolicy(user: AuthUser, companyId: string, input: z.infer<typeof policySchema>) {
     assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
     await this.readCompany(user, companyId);
-    return this.prisma.settlementPolicy.upsert({
-      where: { companyId },
-      create: { companyId, cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '' },
-      update: { cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '' },
+    return this.prisma.$transaction(async (tx) => {
+      const saved = await tx.settlementPolicy.upsert({
+        where: { companyId },
+        create: { companyId, cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '' },
+        update: { cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '' },
+      });
+      await this.appendPolicyVersion(tx, { companyId }, input, user.id);
+      return saved;
     });
   }
 
@@ -152,10 +160,34 @@ export class CommerceService {
     assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
     const plan = assertFound(await this.prisma.distributionPlan.findUnique({ where: { id: planId }, include: { company: true } }));
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, plan.company);
-    return this.prisma.projectSettlementPolicy.upsert({
-      where: { planId },
-      create: { planId, cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '', carryoverNote: input.carryoverNote ?? '' },
-      update: { cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '', carryoverNote: input.carryoverNote ?? '' },
+    return this.prisma.$transaction(async (tx) => {
+      const saved = await tx.projectSettlementPolicy.upsert({
+        where: { planId },
+        create: { planId, cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '', carryoverNote: input.carryoverNote ?? '' },
+        update: { cycleType: input.cycleType, customDays: input.customDays, anchorDate: day(input.anchorDate), note: input.note ?? '', carryoverNote: input.carryoverNote ?? '' },
+      });
+      await this.appendPolicyVersion(tx, { planId }, input, user.id);
+      return saved;
+    });
+  }
+
+  private async appendPolicyVersion(tx: Prisma.TransactionClient, scope: { companyId?: string; planId?: string }, input: z.infer<typeof policySchema>, userId: string) {
+    const last = await tx.settlementPolicyVersion.aggregate({
+      where: scope.companyId ? { companyId: scope.companyId } : { planId: scope.planId },
+      _max: { version: true },
+    });
+    await tx.settlementPolicyVersion.create({
+      data: {
+        companyId: scope.companyId,
+        planId: scope.planId,
+        version: (last._max.version ?? 0) + 1,
+        cycleType: input.cycleType,
+        customDays: input.customDays,
+        anchorDate: day(input.anchorDate),
+        note: input.note ?? '',
+        carryoverNote: input.carryoverNote ?? '',
+        createdById: userId,
+      },
     });
   }
 

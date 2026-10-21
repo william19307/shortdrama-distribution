@@ -86,7 +86,10 @@ describe('核心流程', () => {
       const patched = await authed(manager.token).patch(`/api/platforms/${created.body.id}`).send({ firstBatch: true, enabled: true });
       expect(patched.status).toBeLessThan(300);
       const opsFirst = await authed(ops.token).patch(`/api/platforms/${created.body.id}`).send({ enabled: false });
-      expect(opsFirst.status).toBe(403);
+      expect(opsFirst.status).toBeLessThan(300);
+      expect(opsFirst.body.pendingConfirmation).toBe(true);
+      expect(opsFirst.body.enabled).toBe(true);
+      expect(opsFirst.body.firstBatch).toBe(true);
     }
     const listed = await authed(manager.token).get('/api/platforms');
     const confirmed = await authed(manager.token).patch(`/api/platforms/${listed.body[0].id}`).send({ firstBatch: true });
