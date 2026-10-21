@@ -216,7 +216,7 @@ export class CompanyService {
   }
 
   private presentBank(row: { accountNo: string }, user: AuthUser) {
-    const full = user.role === 'CLIENT' || user.role === 'FINANCE' || user.role === 'ADMIN';
+    const full = user.role === 'FINANCE' || user.role === 'ADMIN';
     return { ...row, accountNo: full ? row.accountNo : maskAccount(row.accountNo) };
   }
 

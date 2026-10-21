@@ -127,6 +127,13 @@ describe('核心流程', () => {
       isDefault: true,
     });
     expect(bank.status).toBeLessThan(300);
+    expect(bank.body.accountNo.endsWith('2222')).toBe(true);
+    expect(bank.body.accountNo).not.toContain('6222000011112222');
+    const banks = await authed(clientToken).get('/api/bank-accounts');
+    expect(banks.body[0].accountNo.endsWith('2222')).toBe(true);
+    expect(String(banks.body[0].accountNo)).not.toContain('622200001111');
+    const financeCompany = await authed(finance.token).get(`/api/companies/${companyId}`);
+    expect(financeCompany.body.bankAccounts[0].accountNo).toBe('6222000011112222');
 
     const drama = await authed(clientToken).post('/api/dramas').send({ title: '测试短剧', language: '英语', episodeCountExpected: 2 });
     expect(drama.status).toBeLessThan(300);

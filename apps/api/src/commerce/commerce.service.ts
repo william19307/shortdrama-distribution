@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable 
 import { ContractStatus, Prisma, SettlementStatus } from '@prisma/client';
 import { CONTRACT_LABEL, SETTLEMENT_LABEL } from '@shortform/shared';
 import { z } from 'zod';
-import { assertCompanyAccess, assertFound } from '../core/access';
+import { assertCompanyAccess, assertFound, maskAccount } from '../core/access';
 import { hidesCommercialTerms, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
@@ -570,8 +570,8 @@ export class CommerceService {
   }
 
   private presentWithdrawal<T extends { bankAccount?: { accountNo: string } }>(row: T, user: AuthUser) {
-    if (!row.bankAccount || user.role === 'CLIENT' || user.role === 'FINANCE' || user.role === 'ADMIN') return row;
-    return { ...row, bankAccount: { ...row.bankAccount, accountNo: `****${row.bankAccount.accountNo.slice(-4)}` } };
+    if (!row.bankAccount || user.role === 'FINANCE' || user.role === 'ADMIN') return row;
+    return { ...row, bankAccount: { ...row.bankAccount, accountNo: maskAccount(row.bankAccount.accountNo) } };
   }
 
   private async advanceInTx(
