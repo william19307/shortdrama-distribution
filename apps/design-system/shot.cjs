@@ -1,0 +1,31 @@
+const { chromium } = require('/workspace/marketing-site/node_modules/playwright');
+const path = require('path');
+(async () => {
+  const b = await chromium.launch({ executablePath: require('fs').readdirSync(process.env.HOME+'/.cache/ms-playwright/chromium-1234').includes('chrome-linux64') ? process.env.HOME+'/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome' : process.env.HOME+'/.cache/ms-playwright/chromium-1234/chrome-linux/chrome' });
+  const p = await b.newPage({ viewport: { width: 1440, height: 900 } });
+  const errs = [], ext = [];
+  p.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') errs.push(m.type() + ': ' + m.text()); });
+  p.on('pageerror', e => errs.push('pageerror: ' + e.message));
+  p.on('request', r => { if (!r.url().startsWith('file:') && !r.url().startsWith('data:')) ext.push(r.url()); });
+  const url = 'file://' + path.resolve('设计系统.html');
+  await p.goto(url); await p.waitForTimeout(1500);
+  const D = 'screenshots/';
+  const sec = async (id, name, off = 0) => { await p.evaluate(([i, o]) => { const e = document.getElementById(i); window.scrollTo(0, e.offsetTop - 64 + o); }, [id, off]); await p.waitForTimeout(1300); await p.screenshot({ path: D + name }); };
+  const all = async (pre) => {
+    await p.evaluate(() => scrollTo(0, 0)); await p.waitForTimeout(600); await p.screenshot({ path: D + pre + '-01-hero.png' });
+    await sec('color', pre + '-02-color.png'); await sec('type', pre + '-03-type.png'); await sec('radius', pre + '-04-radius.png');
+    await sec('components', pre + '-05-components.png'); await sec('components', pre + '-06-bento.png', 820); await sec('components', pre + '-07-badges-chart.png', 1520);
+    await sec('antd', pre + '-08-antd.png', 60); await sec('antd', pre + '-09-antd-form.png', 640); await sec('admin', pre + '-10-admin.png', 150);
+  };
+  await all('dark-zh');
+  await p.click('[data-testid=open-modal]', { force: true }).catch(async () => { await sec('antd', 'x.png', 640); await p.click('[data-testid=open-modal]'); });
+  await p.waitForTimeout(800); await p.screenshot({ path: D + 'dark-zh-11-modal.png' }); await p.keyboard.press('Escape'); await p.waitForTimeout(500);
+  await p.click('[data-testid=theme] button:nth-child(2)'); await p.waitForTimeout(600);
+  await all('light-zh');
+  await p.click('[data-testid=lang] button:nth-child(2)'); await p.waitForTimeout(400);
+  await p.evaluate(() => scrollTo(0, 0)); await p.waitForTimeout(600); await p.screenshot({ path: D + 'light-en-01-hero.png' });
+  await p.click('[data-testid=theme] button:nth-child(1)'); await p.waitForTimeout(600);
+  await p.screenshot({ path: D + 'dark-en-01-hero.png' }); await sec('antd', 'dark-en-08-antd.png', 60); await sec('admin', 'dark-en-10-admin.png', 150);
+  console.log('ERRORS', JSON.stringify(errs, null, 1)); console.log('EXTERNAL', JSON.stringify(ext));
+  await b.close();
+})();
