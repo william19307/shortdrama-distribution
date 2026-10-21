@@ -7,6 +7,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { PlanStatus, Prisma, UploadSession } from '@prisma/client';
 import ExcelJS from 'exceljs';
 import {
+  MULTIPART_GUIDE_BYTES,
   PART_SIZE,
   SINGLE_PUT_MAX,
   clientPhaseFromPlans,
@@ -371,7 +372,64 @@ export class CatalogService {
           partSize: PART_SIZE,
         },
       }));
-    return this.presentSession(session, input.contentType);
+    return this.presentSession(session, input.contentType, Boolean(input.multipart));
+  }
+
+  async listOpenUploads(user: AuthUser) {
+    await this.prisma.uploadSession.updateMany({
+      where: { expiresAt: { lt: new Date() }, status: 'PENDING' },
+      data: { status: 'EXPIRED' },
+    });
+    const where: Prisma.UploadSessionWhereInput = {
+      status: 'PENDING',
+      expiresAt: { gt: new Date() },
+      OR: [{ uploadId: { not: null } }, { size: { gte: BigInt(MULTIPART_GUIDE_BYTES) } }],
+    };
+    if (user.role === 'CLIENT') where.companyId = user.companyId!;
+    else if (user.role === 'OPS' || user.role === 'BD') {
+      const companies = await this.prisma.company.findMany({
+        where: user.role === 'OPS' ? { ownerId: user.id } : { bdId: user.id },
+        select: { id: true },
+      });
+      where.companyId = { in: companies.map((company) => company.id) };
+    } else if (user.role === 'FINANCE') where.purpose = { in: ['INVOICE', 'VOUCHER', 'CONTRACT'] };
+    const rows = await this.prisma.uploadSession.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    const dramaIds = [...new Set(rows.map((row) => row.dramaId).filter((id): id is string => Boolean(id)))];
+    const dramas = dramaIds.length
+      ? await this.prisma.drama.findMany({ where: { id: { in: dramaIds } }, select: { id: true, title: true } })
+      : [];
+    const titleOf = new Map(dramas.map((drama) => [drama.id, drama.title]));
+    const items = rows.map((row) => {
+      const size = Number(row.size);
+      const partSize = row.partSize || PART_SIZE;
+      const completed = Array.isArray(row.parts) ? row.parts.length : 0;
+      const multipart = Boolean(row.uploadId);
+      return {
+        id: row.id,
+        fileName: row.fileName,
+        purpose: row.purpose,
+        dramaId: row.dramaId,
+        dramaTitle: row.dramaId ? titleOf.get(row.dramaId) || '' : '',
+        episodeNo: row.episodeNo,
+        companyId: row.companyId,
+        size: String(row.size),
+        mode: multipart ? 'multipart' as const : 'single' as const,
+        partSize,
+        partCount: multipart ? Math.ceil(size / partSize) : 1,
+        completedCount: completed,
+        resumeGuide: multipart || size >= MULTIPART_GUIDE_BYTES,
+      };
+    });
+    const pendingDramas = new Set(items.map((item) => item.dramaId || item.id)).size;
+    return {
+      pendingDramas,
+      label: pendingDramas ? `有 ${pendingDramas} 部未完成` : '',
+      items,
+    };
   }
 
   async signPart(user: AuthUser, id: string, partNumber: number) {
@@ -520,9 +578,9 @@ export class CatalogService {
     return this.storage.driver() === 'memory' || process.env.UPLOAD_VIA_API === 'true';
   }
 
-  private async presentSession(session: UploadSession, contentType: string) {
+  private async presentSession(session: UploadSession, contentType: string, forceMultipart = false) {
     const size = Number(session.size);
-    const multipart = this.storage.driver() === 's3' && size > SINGLE_PUT_MAX;
+    const multipart = Boolean(session.uploadId) || (this.storage.driver() === 's3' && (size > SINGLE_PUT_MAX || forceMultipart || size >= MULTIPART_GUIDE_BYTES));
     const viaApi = this.viaApi();
     if (!multipart) {
       const signed = viaApi ? { url: `/api/storage/uploads/${session.id}/content`, headers: {} } : await this.storage.presignPut(session.key, contentType);

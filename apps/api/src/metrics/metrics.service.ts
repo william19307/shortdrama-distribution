@@ -16,6 +16,7 @@ import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
+import { zipStore } from '../core/zip';
 import { StorageService } from '../core/storage.service';
 import { shanghaiStamp, stampImage } from './watermark';
 import { dailyListSchema, dailyStatSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
@@ -209,17 +210,14 @@ export class MetricsService {
     if (!shotDate && parsed?.date) shotDate = parsed.date;
     if (drama && (user.role === 'OPS' || user.role === 'BD')) assertCompanyAccess(user, drama.company);
     if (!drama || !platform || !shotDate) fail = fail || '缺少剧目、平台或日期，进入待归档';
-    const when = shanghaiStamp();
-    const text = `${platform?.name || parsed?.platformCode || '平台'} | ${drama?.title || parsed?.dramaToken || '剧目'} | ${user.name} | ${when} | 原图 ${originalSha.slice(0, 12)}`;
-    let stamped: Buffer;
-    try {
-      stamped = await stampImage(original, text);
-    } catch {
-      throw new BadRequestException('这张图无法加水印，请上传 png 或 jpg');
-    }
-    const sha256 = createHash('sha256').update(stamped).digest('hex');
+    const matched = !fail && drama && platform && shotDate ? { drama, platform, shotDate } : null;
+    const ticket = matched
+      ? await this.ensureTicket(matched.drama.companyId, matched.drama.id, matched.drama.title, matched.platform.name, matched.shotDate, user.id)
+      : null;
+    const stamped = await this.stampShot(original, originalSha, platform?.name || parsed?.platformCode || '平台', drama?.title || parsed?.dramaToken || '剧目', user.name, ticket?.code || '');
+    const sha256 = createHash('sha256').update(stamped.bytes).digest('hex');
     const key = `${drama?.companyId || input.fileKey.split('/')[0]}/watermark/${sha256.slice(0, 16)}.png`;
-    await this.storage.putObject(key, stamped, 'image/png');
+    await this.storage.putObject(key, stamped.bytes, 'image/png');
     const shot = await this.prisma.watermarkShot.create({
       data: {
         companyId: drama?.companyId,
@@ -235,12 +233,11 @@ export class MetricsService {
         status: fail ? 'PENDING_MATCH' : 'ARCHIVED',
         failReason: fail,
         operatorId: user.id,
+        ticketId: ticket?.id,
+        ticketCode: ticket?.code || '',
       },
     });
-    if (!fail && drama && platform && shotDate) {
-      await this.attachTicket(shot.id, drama.companyId, drama.id, drama.title, platform.name, shotDate, user.id);
-    }
-    await this.audit.write(user.id, 'watermark.create', 'WatermarkShot', shot.id, { sha256 });
+    await this.audit.write(user.id, 'watermark.create', 'WatermarkShot', shot.id, { sha256, ticketCode: shot.ticketCode });
     const url = await this.storage.presignGet(key);
     return { ...shot, url };
   }
@@ -252,12 +249,53 @@ export class MetricsService {
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }));
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }));
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
-    const updated = await this.prisma.watermarkShot.update({
-      where: { id },
-      data: { companyId: drama.companyId, dramaId: drama.id, platformId: platform.id, shotDate: day(input.shotDate), status: 'ARCHIVED', failReason: null },
-    });
-    await this.attachTicket(updated.id, drama.companyId, drama.id, drama.title, platform.name, input.shotDate, user.id);
+    const ticket = await this.ensureTicket(drama.companyId, drama.id, drama.title, platform.name, input.shotDate, user.id);
+    const data: Prisma.WatermarkShotUpdateInput = {
+      company: { connect: { id: drama.companyId } },
+      drama: { connect: { id: drama.id } },
+      platform: { connect: { id: platform.id } },
+      shotDate: day(input.shotDate),
+      status: 'ARCHIVED',
+      failReason: null,
+      ticket: { connect: { id: ticket.id } },
+      ticketCode: ticket.code,
+    };
+    try {
+      const original = await this.storage.getObject(shot.originalKey);
+      const originalSha = createHash('sha256').update(original).digest('hex');
+      const stamped = await this.stampShot(original, originalSha, platform.name, drama.title, user.name, ticket.code);
+      const sha256 = createHash('sha256').update(stamped.bytes).digest('hex');
+      const key = `${drama.companyId}/watermark/${sha256.slice(0, 16)}.png`;
+      await this.storage.putObject(key, stamped.bytes, 'image/png');
+      data.watermarkedKey = key;
+      data.sha256 = sha256;
+      data.shortHash = sha256.slice(0, 12);
+    } catch {
+      // 原图读不出来时仍记下工单号，列表可以按字段找到这张截图。
+    }
+    const updated = await this.prisma.watermarkShot.update({ where: { id }, data });
     return updated;
+  }
+
+  async archiveEvidence(user: AuthUser, fileKeys: string[]) {
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'], '运营才能打包截图');
+    const files: { name: string; data: Buffer }[] = [];
+    for (const key of fileKeys) {
+      const companyId = key.split('/')[0];
+      const company = assertFound(await this.prisma.company.findUnique({ where: { id: companyId } }), '截图不存在');
+      if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
+      let bytes: Buffer;
+      try {
+        bytes = await this.storage.getObject(key);
+      } catch {
+        throw new BadRequestException('有截图还没有上传完成');
+      }
+      const shot = await this.prisma.watermarkShot.findFirst({ where: { OR: [{ watermarkedKey: key }, { originalKey: key }] }, select: { filename: true, ticketCode: true } });
+      const name = shot?.filename || key.split('/').pop() || 'shot.png';
+      files.push({ name: shot?.ticketCode ? `${shot.ticketCode}-${name}` : name, data: bytes });
+    }
+    await this.audit.write(user.id, 'evidence.archive', 'WatermarkShot', fileKeys[0], { count: fileKeys.length });
+    return zipStore(files);
   }
 
   async listWatermarks(user: AuthUser, status?: string) {
@@ -432,7 +470,17 @@ export class MetricsService {
     return where;
   }
 
-  private async attachTicket(shotId: string, companyId: string, dramaId: string, title: string, platformName: string, shotDate: string, actorId: string) {
+  private async stampShot(original: Buffer, originalSha: string, platformName: string, dramaTitle: string, operator: string, ticketCode: string) {
+    const when = shanghaiStamp();
+    const text = `${platformName} | ${dramaTitle} | ${operator} | ${when} | 原图 ${originalSha.slice(0, 12)}${ticketCode ? ` | ${ticketCode}` : ''}`;
+    try {
+      return { bytes: await stampImage(original, text), text };
+    } catch {
+      throw new BadRequestException('这张图无法加水印，请上传 png 或 jpg');
+    }
+  }
+
+  private async ensureTicket(companyId: string, dramaId: string, title: string, platformName: string, shotDate: string, actorId: string) {
     const ticketTitle = `${shotDate} 平台截图`;
     let ticket = await this.prisma.ticket.findFirst({ where: { companyId, type: 'WATERMARK', title: ticketTitle } });
     if (!ticket) {
@@ -441,8 +489,8 @@ export class MetricsService {
         data: { code, companyId, type: 'WATERMARK', status: 'PENDING_CLIENT', title: ticketTitle, body: '当天的上架和数据截图都在这张工单里。', createdById: actorId },
       });
     }
-    await this.prisma.watermarkShot.update({ where: { id: shotId }, data: { ticketId: ticket.id } });
     await this.prisma.ticket.update({ where: { id: ticket.id }, data: { body: `${ticket.body}\n${platformName} · 《${title}》`, dramaId: ticket.dramaId ?? dramaId } });
+    return ticket;
   }
 }
 

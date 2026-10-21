@@ -81,6 +81,11 @@ export class CatalogController {
     return this.catalog.update(user, id, body);
   }
 
+  @Get('storage/uploads')
+  openUploads(@CurrentUser() user: AuthUser) {
+    return this.catalog.listOpenUploads(user);
+  }
+
   @Post('storage/uploads')
   init(@CurrentUser() user: AuthUser, @Body(new ZodPipe(uploadInitSchema)) body: z.infer<typeof uploadInitSchema>) {
     return this.catalog.initUpload(user, body);

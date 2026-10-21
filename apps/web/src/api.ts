@@ -48,6 +48,21 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
   return data as T;
 }
 
+export async function downloadPost(path: string, json: unknown, filename: string) {
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(`/api${path}`, { method: 'POST', headers, body: JSON.stringify(json) });
+  if (!res.ok) throw new ApiError(res.status, '下载失败');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function download(path: string, filename: string) {
   const headers = new Headers();
   const token = getToken();
@@ -98,13 +113,16 @@ function putBlob(url: string, body: Blob, headers: Headers, onProgress?: (loaded
   });
 }
 
-/** 小文件一次 PUT；超过 8MB 且对象存储为 S3 时按分片上传。失败后用同一文件再调一次即可续传已确认的分片。 */
+const MULTIPART_GUIDE_BYTES = 500 * 1024 * 1024;
+
+/** 小文件一次 PUT；超过 8MB 且存储为 S3 时分片。大于等于 500MB 或文件夹上传会带上 multipart，失败后用同一文件再调一次即可续传已确认的分片。 */
 export async function uploadFile(
   file: File,
   purpose: string,
   extra: { dramaId?: string; episodeNo?: number; companyId?: string } = {},
-  options: { onProgress?: (ratio: number) => void } = {},
+  options: { onProgress?: (ratio: number) => void; multipart?: boolean } = {},
 ) {
+  const multipart = Boolean(options.multipart) || file.size >= MULTIPART_GUIDE_BYTES;
   const session = await api<UploadSession>('/storage/uploads', {
     method: 'POST',
     json: {
@@ -112,6 +130,7 @@ export async function uploadFile(
       contentType: file.type || 'application/octet-stream',
       size: file.size,
       purpose,
+      multipart,
       ...extra,
     },
   });

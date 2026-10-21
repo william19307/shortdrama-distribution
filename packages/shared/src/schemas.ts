@@ -97,6 +97,7 @@ export const uploadInitSchema = z.object({
   companyId: z.string().optional(),
   episodeNo: z.number().int().positive().max(999).optional(),
   fingerprint: z.string().max(200).optional(),
+  multipart: z.boolean().optional(),
 });
 
 export const partSignSchema = z.object({
@@ -244,6 +245,10 @@ export const dailyListSchema = pageSchema.extend({
   to: dateStr.optional(),
   status: z.enum(['DRAFT', 'REVIEWED', 'ANOMALY', 'LOCKED']).optional(),
   companyId: z.string().optional(),
+});
+
+export const evidenceArchiveSchema = z.object({
+  fileKeys: z.array(z.string().trim().min(1).max(400)).min(1, '请选择截图').max(100, '一次最多 100 张'),
 });
 
 export const watermarkCreateSchema = z.object({

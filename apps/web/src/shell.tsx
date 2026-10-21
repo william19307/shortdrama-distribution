@@ -19,11 +19,11 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import type { Role } from '@shortform/shared';
-import { Badge, Button, Drawer, Dropdown, Layout, Menu, Segmented, Space, Switch, Typography } from 'antd';
+import { App, Badge, Button, Drawer, Dropdown, Layout, Menu, Segmented, Space, Switch, Typography, Upload } from 'antd';
 import type { MenuProps } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { api } from './api';
+import { api, uploadFile } from './api';
 import { roleLabel, useAuth } from './auth';
 import { useDsTheme } from './theme';
 
@@ -83,7 +83,9 @@ export function Shell() {
   const { user, logout } = useAuth();
   const { mode, density, setMode, setDensity } = useDsTheme();
   const [openKeys, setOpenKeys] = useState<string[]>(user?.role === 'CLIENT' ? ['client-detail'] : []);
+  const { message } = App.useApp();
   const [unread, setUnread] = useState(0);
+  const [queue, setQueue] = useState<{ label: string; pendingDramas: number; items: { id: string; fileName: string; purpose: string; dramaId: string | null; dramaTitle: string; episodeNo: number | null; companyId: string; size: string; mode: string; partCount: number; completedCount: number }[] }>({ label: '', pendingDramas: 0, items: [] });
   const [queueOpen, setQueueOpen] = useState(false);
   const nav = useNavigate();
   const loc = useLocation();
@@ -105,6 +107,33 @@ export function Shell() {
       .catch(() => { if (!stop) setUnread(0); });
     return () => { stop = true; };
   }, [user, loc.pathname]);
+  useEffect(() => {
+    if (!user || user.role !== 'CLIENT') return;
+    let stop = false;
+    const load = () => {
+      api<typeof queue>('/storage/uploads')
+        .then((res) => { if (!stop) setQueue(res); })
+        .catch(() => undefined);
+    };
+    load();
+    if (!queueOpen) return () => { stop = true; };
+    const timer = window.setInterval(load, 4000);
+    return () => { stop = true; window.clearInterval(timer); };
+  }, [user, queueOpen]);
+  const resumeUpload = async (item: (typeof queue.items)[number], file: File) => {
+    if (file.name !== item.fileName || String(file.size) !== item.size) {
+      message.error(`请选择原来的文件「${item.fileName}」继续`);
+      return;
+    }
+    try {
+      await uploadFile(file, item.purpose, { dramaId: item.dramaId || undefined, episodeNo: item.episodeNo || undefined, companyId: item.companyId }, { multipart: item.mode === 'multipart' });
+      message.success('已继续传完');
+      const res = await api<typeof queue>('/storage/uploads');
+      setQueue(res);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : '没有续传');
+    }
+  };
   const accountMenu: MenuProps['items'] = [
     ...(user?.role === 'CLIENT'
       ? [
@@ -162,8 +191,21 @@ export function Shell() {
           <Outlet />
         </Content>
       </Layout>
-      <Drawer title="上传队列" open={queueOpen} onClose={() => setQueueOpen(false)} width={360}>
-        <Typography.Text type="secondary">当前没有进行中的上传。在视频存储库里上传成片、封面或授权书时，进度会显示在对应页面。</Typography.Text>
+      <Drawer title="上传队列" open={queueOpen} onClose={() => setQueueOpen(false)} width={380}>
+        <Typography.Paragraph type="secondary">大于或等于 500MB 的文件，以及文件夹上传，按分片续传。中断后选择原来的文件继续。</Typography.Paragraph>
+        {queue.label ? <Typography.Title level={5} style={{ marginTop: 0 }}>{queue.label}</Typography.Title> : <Typography.Text type="secondary">当前没有未完成的分片。</Typography.Text>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
+          {queue.items.map((item) => (
+            <div key={item.id} style={{ border: '1px solid var(--ds-border)', borderRadius: 8, padding: 12 }}>
+              <div>{item.dramaTitle || '未归属剧目'}{item.episodeNo ? ` · 第 ${item.episodeNo} 集` : ''}</div>
+              <div style={{ color: 'var(--ds-text-3)' }}>{item.fileName}</div>
+              <div style={{ color: 'var(--ds-text-3)' }}>{item.mode === 'multipart' ? `分片 ${item.completedCount}/${item.partCount}` : '等待上传'}</div>
+              <Upload showUploadList={false} beforeUpload={(file) => { void resumeUpload(item, file); return false; }}>
+                <Button size="small" style={{ marginTop: 8 }}>继续上传</Button>
+              </Upload>
+            </div>
+          ))}
+        </div>
       </Drawer>
     </Layout>
   );

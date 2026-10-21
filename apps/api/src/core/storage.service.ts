@@ -84,19 +84,33 @@ export class MemoryStorageService extends StorageService {
   }
 }
 
-@Injectable()
-export class S3StorageService extends StorageService {
-  private readonly logger = new Logger(S3StorageService.name);
-  private readonly bucket = process.env.S3_BUCKET || 'shortform';
-  private readonly client = new S3Client({
+function s3ClientOptions(endpoint: string | undefined) {
+  return {
     region: process.env.S3_REGION || 'us-east-1',
-    endpoint: process.env.S3_ENDPOINT,
+    endpoint,
     forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
     credentials: {
       accessKeyId: process.env.S3_ACCESS_KEY || '',
       secretAccessKey: process.env.S3_SECRET_KEY || '',
     },
-  });
+    // 旧版 MinIO 不认识 SDK 默认附带的校验和请求头。
+    requestChecksumCalculation: 'WHEN_REQUIRED' as const,
+    responseChecksumValidation: 'WHEN_REQUIRED' as const,
+  };
+}
+
+/** 容器内用 S3_ENDPOINT（如 http://minio:9000）。发给浏览器的预签名改用 PUBLIC_OBJECT_URL。 */
+export function publicObjectEndpoint() {
+  const raw = (process.env.PUBLIC_OBJECT_URL || process.env.S3_ENDPOINT || '').trim().replace(/\/$/, '');
+  return raw;
+}
+
+@Injectable()
+export class S3StorageService extends StorageService {
+  private readonly logger = new Logger(S3StorageService.name);
+  private readonly bucket = process.env.S3_BUCKET || 'shortform';
+  private readonly client = new S3Client(s3ClientOptions(process.env.S3_ENDPOINT));
+  private readonly signer = new S3Client(s3ClientOptions(publicObjectEndpoint()));
 
   driver(): 's3' {
     return 's3';
@@ -128,12 +142,12 @@ export class S3StorageService extends StorageService {
   }
 
   async presignPut(key: string, contentType: string) {
-    const url = await getSignedUrl(this.client, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }), { expiresIn: 3600 });
+    const url = await getSignedUrl(this.signer, new PutObjectCommand({ Bucket: this.bucket, Key: key, ContentType: contentType }), { expiresIn: 3600 });
     return { url, headers: { 'Content-Type': contentType } };
   }
 
   async presignGet(key: string) {
-    return getSignedUrl(this.client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: 3600 });
+    return getSignedUrl(this.signer, new GetObjectCommand({ Bucket: this.bucket, Key: key }), { expiresIn: 3600 });
   }
 
   async createMultipart(key: string, contentType: string) {
@@ -143,7 +157,7 @@ export class S3StorageService extends StorageService {
   }
 
   async presignPart(key: string, uploadId: string, partNumber: number) {
-    return getSignedUrl(this.client, new UploadPartCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber }), { expiresIn: 3600 });
+    return getSignedUrl(this.signer, new UploadPartCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber }), { expiresIn: 3600 });
   }
 
   async completeMultipart(key: string, uploadId: string, parts: StoredPart[]) {

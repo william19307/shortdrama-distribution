@@ -1,10 +1,10 @@
 import { motion as motionTokens } from '@ds/tokens';
-import { App, Button, Card, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Upload } from 'antd';
+import { App, Button, Card, Checkbox, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Upload } from 'antd';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, LISTING_NEXT, SHARE_MODE_LABEL } from '@shortform/shared';
-import { api, download, getToken, qs, uploadFile, type Page } from '../api';
+import { api, download, downloadPost, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNote, PageHead, PlatformChip, StatusTag, dayText, labelOf } from '../ui';
 
@@ -591,13 +591,14 @@ export function WatermarksPage() {
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [dramas, setDramas] = useState<any[]>([]);
   const [form, setForm] = useState({ dramaId: '', platformId: '', shotDate: '', kind: 'DATA', filename: '' });
+  const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState('');
   const load = () => api<any[]>('/watermarks').then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); api<any[]>('/platforms').then(setPlatforms); api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)); }, []);
 
   return (
     <div>
-      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人和上海时间。成功匹配的截图并进当天的工单。" />
+      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人、上海时间和工单号。成功匹配的截图并进当天的工单。勾选后可以打包下载。" extra={<Button disabled={!picked.length || user?.role === 'ADMIN'} onClick={async () => { try { await downloadPost('/evidence/archive-zip', { fileKeys: picked }, 'evidence.zip'); } catch (err) { message.error(err instanceof Error ? err.message : '没有下载'); } }}>批量下载</Button>} />
       <ErrorNote error={error} />
       <Space wrap style={{ marginBottom: 12 }}>
         <Select style={{ width: 220 }} placeholder="剧" value={form.dramaId || undefined} onChange={(dramaId) => setForm({ ...form, dramaId })} options={dramas.map((item) => ({ value: item.id, label: item.title }))} />
@@ -619,8 +620,12 @@ export function WatermarksPage() {
       <div className="poster-grid">
         {rows.map((shot) => (
           <Card key={shot.id} cover={shot.url ? <img src={shot.url} alt="" style={{ height: 160, objectFit: 'cover' }} /> : null} size="small">
-            <StatusTag status={shot.status === 'ARCHIVED' ? 'APPROVED' : 'PENDING'} text={shot.status === 'ARCHIVED' ? '已归档' : '待归档'} />
+            <Space>
+              {shot.watermarkedKey ? <Checkbox checked={picked.includes(shot.watermarkedKey)} onChange={(event) => setPicked((cur) => event.target.checked ? [...new Set([...cur, shot.watermarkedKey])] : cur.filter((key) => key !== shot.watermarkedKey))} /> : null}
+              <StatusTag status={shot.status === 'ARCHIVED' ? 'APPROVED' : 'PENDING'} text={shot.status === 'ARCHIVED' ? '已归档' : '待归档'} />
+            </Space>
             <div>{shot.drama?.title || '未匹配剧目'} · {shot.platform?.name || '未匹配平台'}</div>
+            <div>工单号 {shot.ticketCode || '—'}</div>
             <div style={{ color: 'var(--ds-text-3)' }}>{shot.shortHash} {shot.failReason || ''}</div>
           </Card>
         ))}

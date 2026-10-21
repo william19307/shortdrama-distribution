@@ -137,7 +137,9 @@ apps/design-system
 | `DATABASE_URL` | Postgres |
 | `PORT` / `WEB_ORIGIN` / `JWT_SECRET` | API 端口、网页来源、登录令牌 |
 | `STORAGE_DRIVER` | `s3` 或 `memory` |
-| `S3_ENDPOINT` `S3_REGION` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY` `S3_FORCE_PATH_STYLE` | MinIO 或腾讯云 COS。COS 一般关闭 path style，endpoint 用 `https://cos.<region>.myqcloud.com` |
+| `S3_ENDPOINT` `S3_REGION` `S3_BUCKET` `S3_ACCESS_KEY` `S3_SECRET_KEY` `S3_FORCE_PATH_STYLE` | MinIO 或腾讯云 COS。COS 一般关闭 path style，endpoint 用 `https://cos.<region>.myqcloud.com`。容器内访问 MinIO 用 `http://minio:9000` |
+| `PUBLIC_OBJECT_URL` | 签发给浏览器的文件地址，例如 `http://localhost:9000`。封面、水印和缩略图不能带 `minio:9000`。不设则与 `S3_ENDPOINT` 相同 |
+| `UPLOAD_VIA_API` | 为 true 时上传经 API 写入存储。读文件地址仍走 `PUBLIC_OBJECT_URL` |
 
 存储走 `StorageService`：预签名直传、分片、读取和水印图都通过这个接口。换成 COS 只改环境变量。
 
@@ -147,12 +149,12 @@ apps/design-system
 
 - 注册登录，角色：客户、运营、运营主管、商务、财务、管理员。运营只处理自己负责的客户，主管看全部客户。商务不能看结算单、提款单和保底。
 - 企业认证（含主体变更审核期间冻结提款）、收款账户。户名在已认证后必须与企业名一致。客户端看到的银行账号只保留后 4 位，财务和管理员仍看完整账号。
-- 剧目、封面、分集、授权书、版权证明。分集走预签名直传；超过 8MB 且存储为 S3 时分片。浏览器显示进度，失败可重试并跳过已确认分片。`UPLOAD_VIA_API=true` 时改为经 API 写入存储，方便只开放网页端口。列表服务端分页、筛选，剧名有 `pg_trgm` 索引。
+- 剧目、封面、分集、授权书、版权证明。分集走预签名直传；超过 8MB 且存储为 S3 时分片。大于或等于 500MB 的文件，以及文件夹上传，按分片续传。客户右上角上传队列列出未完成的分片，文案是「有 N 部未完成」，可以选择原来的文件继续。`UPLOAD_VIA_API=true` 时上传改经 API 写入存储。封面和截图的读取地址用 `PUBLIC_OBJECT_URL`，不会返回容器内网主机名。列表服务端分页、筛选，剧名有 `pg_trgm` 索引。
 - 发行计划。首发固定为当前启用的 ReelShort、DramaBox、ShortMax、FlexTV、GoodShort，客户不能删。二轮可选手填平台。
 - 抽检审核（8 集及以内全审，否则头尾加中间样本）、驳回、替换、重提。二轮且成片都已通过则跳过审核。
 - 按平台配置保底、超保底、无保底。客户和商务看到的分成、结算明细按字段白名单返回，保底金额和结转说明不会出现。结转只记在项目策略上，不参与计算。分成由运营主管或管理员复核，提交人不能复核自己提交的。
 - 每日数据手工录入，字段对齐调研文档的 32 项。日期与平台口径不一致时给出提示，不阻断。
-- 截图加水印（暗纹 + 上海时间明文 + 原图短哈希），匹配成功后进入工单。
+- 截图加水印（暗纹 + 上海时间明文 + 原图短哈希 + 工单号）。匹配成功后进入工单，水印记录带 `ticketCode`。运营可以多选截图，`POST /api/evidence/archive-zip` 打包下载。
 - 数据看板、合同申请与列表。合同状态只能按申请中 → 起草中 → 待签署 → 客户或代传扫描件进入待确认 → 运营确认后生效 → 已到期。不能直接改成已生效。扫描件必须已在存储中，且属于该客户。商务只能改自己负责的客户。
 - 发行申请前，授权书或版权证明必须已审核通过。
 - 商务只看 `bdId` 指向自己的客户。财务菜单限于认证、结算、提款和汇率，可以下载和导入应结模板，没有「全局参数」。

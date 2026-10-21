@@ -47,6 +47,7 @@ services:
       WEB_ORIGIN: http://localhost:${WEB_PORT:-8080}
       STORAGE_DRIVER: s3
       S3_ENDPOINT: http://minio:9000
+      PUBLIC_OBJECT_URL: http://localhost:9000
       S3_REGION: us-east-1
       S3_BUCKET: shortform
       S3_ACCESS_KEY: ${MINIO_ROOT_USER}

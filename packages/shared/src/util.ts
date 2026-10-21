@@ -129,3 +129,5 @@ export const DAILY_FIELD_DOCS: { key: string; zh: string; required: boolean }[] 
 
 export const PART_SIZE = 8 * 1024 * 1024;
 export const SINGLE_PUT_MAX = 8 * 1024 * 1024;
+/** 达到这个大小，或整夹上传时，引导走分片续传。 */
+export const MULTIPART_GUIDE_BYTES = 500 * 1024 * 1024;

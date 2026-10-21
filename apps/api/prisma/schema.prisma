@@ -575,6 +575,7 @@ model WatermarkShot {
   failReason     String?
   operatorId     String
   ticketId       String?
+  ticketCode     String          @default("")
   ticket         Ticket?         @relation(fields: [ticketId], references: [id])
   createdAt      DateTime        @default(now())
 

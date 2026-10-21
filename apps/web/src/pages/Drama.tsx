@@ -73,9 +73,11 @@ export function DramaPage() {
 
   const first = platforms.filter((item) => item.firstBatch && item.enabled);
   const sendFile = async (file: File, purpose: string, no?: number) => {
+    const large = file.size >= 500 * 1024 * 1024;
+    if (large) message.info('这个文件大于或等于 500MB，按分片续传。中断后打开右上角上传队列，选择同一文件继续。');
     setUpload({ name: file.name, percent: 0 });
     try {
-      await uploadFile(file, purpose, { dramaId: id, episodeNo: no }, { onProgress: (ratio) => setUpload({ name: file.name, percent: Math.round(ratio * 100) }) });
+      await uploadFile(file, purpose, { dramaId: id, episodeNo: no }, { multipart: large, onProgress: (ratio) => setUpload({ name: file.name, percent: Math.round(ratio * 100) }) });
       message.success('已保存');
       setUpload(null);
       load();

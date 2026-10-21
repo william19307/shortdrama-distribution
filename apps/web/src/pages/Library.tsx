@@ -4,7 +4,7 @@ import { Button, Checkbox, Input, Modal, Segmented, Select, Space, Table, Typogr
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { api, download, getToken, qs, type Page } from '../api';
+import { api, download, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNote, PageHead, PhaseTag, dayText } from '../ui';
 
@@ -37,7 +37,8 @@ export function LibraryPage() {
   const [selected, setSelected] = useState<string[]>([]);
   const [filterCount, setFilterCount] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
-  const [folder, setFolder] = useState<{ title: string; episodes: { no: number; fileName: string }[]; cover?: string; poster?: string; trailer?: string; subtitles: string[]; conflicts: string[] }[] | null>(null);
+  const [folder, setFolder] = useState<{ title: string; episodes: { no: number; path: string; fileName: string }[]; cover?: string; poster?: string; trailer?: string; subtitles: string[]; conflicts: string[] }[] | null>(null);
+  const [folderFiles, setFolderFiles] = useState<File[]>([]);
   const [metaFile, setMetaFile] = useState<File | null>(null);
   const [metaRows, setMetaRows] = useState<{ rowNo: number; ok: boolean; error: string; title?: string; action?: string }[] | null>(null);
 
@@ -67,6 +68,7 @@ export function LibraryPage() {
         <Space wrap style={{ marginBottom: 16 }}>
           <Upload directory multiple showUploadList={false} beforeUpload={(file, list) => {
             if (file !== list[list.length - 1]) return false;
+            setFolderFiles(list);
             const paths = list.map((item) => (item as File & { webkitRelativePath?: string }).webkitRelativePath || item.name).filter(Boolean);
             api<{ dramas: NonNullable<typeof folder> }>('/library/folder-preview', { method: 'POST', json: { paths } }).then((res) => setFolder(res.dramas)).catch((err) => setError(err.message));
             return false;
@@ -85,17 +87,38 @@ export function LibraryPage() {
           }}><Button>导入元数据</Button></Upload>
         </Space>
       ) : null}
-      <Modal title="匹配确认" open={Boolean(folder)} onCancel={() => setFolder(null)} okText="全部确认" onOk={async () => {
+      <Modal title="匹配确认" open={Boolean(folder)} onCancel={() => setFolder(null)} okText="全部确认并上传" onOk={async () => {
         if (!folder) return;
         const paths = folder.flatMap((drama) => [
-          ...drama.episodes.map((episode) => `${drama.title}/${episode.fileName}`),
+          ...drama.episodes.map((episode) => episode.path || `${drama.title}/${episode.fileName}`),
           drama.cover, drama.poster, drama.trailer, ...drama.subtitles,
         ].filter((item): item is string => Boolean(item)));
-        await api('/library/folder-apply', { method: 'POST', json: { paths } });
-        setFolder(null);
-        setNotice('文件夹已确认');
-        load();
+        const large = folderFiles.some((file) => file.size >= 500 * 1024 * 1024);
+        try {
+          const applied = await api<{ dramas: { id: string; title: string }[] }>('/library/folder-apply', { method: 'POST', json: { paths } });
+          const byPath = new Map(folderFiles.map((file) => [(file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name, file]));
+          for (const drama of folder) {
+            const created = applied.dramas.find((item) => item.title === drama.title);
+            if (!created) continue;
+            for (const episode of drama.episodes) {
+              const file = byPath.get(episode.path) || byPath.get(`${drama.title}/${episode.fileName}`);
+              if (!file) continue;
+              await uploadFile(file, 'EPISODE', { dramaId: created.id, episodeNo: episode.no }, { multipart: true });
+            }
+            if (drama.cover) {
+              const cover = byPath.get(drama.cover);
+              if (cover) await uploadFile(cover, 'COVER', { dramaId: created.id }, { multipart: true });
+            }
+          }
+          setFolder(null);
+          setFolderFiles([]);
+          setNotice(`文件夹按分片续传。未完成的在右上角上传队列，会写「有 N 部未完成」。${large ? '其中有大于或等于 500MB 的文件，同样走分片。' : ''}`);
+          load();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : '文件夹没有传完，可在上传队列继续');
+        }
       }}>
+        <p style={{ color: 'var(--ds-text-3)' }}>文件夹里的成片按分片续传。大于或等于 500MB 的文件也走分片。中断后到右上角上传队列，选择原来的文件继续。</p>
         {(folder || []).map((drama) => (
           <div key={drama.title} style={{ marginBottom: 12 }}>
             <b>{drama.title}</b>

@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { dailyListSchema, dailyStatSchema, forcePublishSchema, importConfirmSchema, importIgnoreSchema, importMappingSchema, importMarkSchema, importPatchRowSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
+import { dailyListSchema, dailyStatSchema, evidenceArchiveSchema, forcePublishSchema, importConfirmSchema, importIgnoreSchema, importMappingSchema, importMarkSchema, importPatchRowSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -144,6 +144,12 @@ export class MetricsController {
     @Body(new ZodPipe(forcePublishSchema)) body: z.infer<typeof forcePublishSchema>,
   ) {
     return this.metrics.forcePublish(user, id, body.reason);
+  }
+
+  @Post('evidence/archive-zip')
+  async archiveZip(@CurrentUser() user: AuthUser, @Body(new ZodPipe(evidenceArchiveSchema)) body: z.infer<typeof evidenceArchiveSchema>) {
+    const zip = await this.metrics.archiveEvidence(user, body.fileKeys);
+    return new StreamableFile(zip, { type: 'application/zip', disposition: 'attachment; filename="evidence.zip"' });
   }
 
   @Post('watermarks')

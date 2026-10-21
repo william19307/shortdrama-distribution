@@ -1,0 +1,1 @@
+ALTER TABLE "WatermarkShot" ADD COLUMN "ticketCode" TEXT NOT NULL DEFAULT '';
