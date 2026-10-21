@@ -12,7 +12,7 @@ import {
 } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
-import { hidesCommercialTerms, stripCommercialKeys } from '../core/viewer-dto';
+import { dailyDto, hidesCommercialTerms, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { moneyDecimal } from '../core/money';
@@ -57,7 +57,9 @@ export class MetricsService {
       this.prisma.dailyStat.count({ where }),
     ]);
     return {
-      items: hidesCommercialTerms(user.role) ? items.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : items,
+      items: user.role === 'CLIENT'
+        ? items.map((item) => dailyDto(item as unknown as Record<string, unknown>))
+        : hidesCommercialTerms(user.role) ? items.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : items,
       total,
       page: query.page,
       pageSize: query.pageSize,
@@ -421,7 +423,7 @@ export class MetricsService {
           ...(user.role === 'CLIENT' ? rest : item),
           operatorName: operatorName.get(item.operatorId) || '',
           url: item.watermarkedKey ? await this.storage.presignGet(item.watermarkedKey).catch(() => null) : null,
-          originalUrl: user.role === 'CLIENT' ? null : await this.storage.presignGet(originalKey).catch(() => null),
+          ...(user.role === 'CLIENT' ? {} : { originalUrl: await this.storage.presignGet(originalKey).catch(() => null) }),
         };
       }),
     );

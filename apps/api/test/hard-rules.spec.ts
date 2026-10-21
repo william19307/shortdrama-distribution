@@ -45,6 +45,57 @@ describe('保底白名单与生产密钥', () => {
     expect(JSON.stringify(toPlain(share, 'OPS'))).toContain('guaranteeAmount');
   });
 
+  it('B1-05 客户端日报和结算策略按白名单返回，商务仍只剔除保底字段', () => {
+    const daily = {
+      id: 'd1',
+      recordId: 'R1',
+      companyId: 'c',
+      platformId: 'p',
+      platform: { id: 'p', name: 'ReelShort' },
+      dramaId: 'dr',
+      drama: { id: 'dr', title: '闪婚' },
+      statDate: '2026-10-01',
+      views: 10,
+      netRevenue: '1.00',
+      currency: 'USD',
+      dealType: 'MG',
+      status: 'REVIEWED',
+      mgAmount: '9.00',
+      mgRecouped: '1.00',
+      revenueShareDue: '0',
+      secretNote: '内部',
+    };
+    expect(toPlain(daily, 'CLIENT')).toEqual({
+      id: 'd1',
+      recordId: 'R1',
+      companyId: 'c',
+      platformId: 'p',
+      platform: { id: 'p', name: 'ReelShort' },
+      dramaId: 'dr',
+      drama: { id: 'dr', title: '闪婚' },
+      statDate: '2026-10-01',
+      views: 10,
+      netRevenue: '1.00',
+      currency: 'USD',
+      dealType: 'MG',
+      status: 'REVIEWED',
+    });
+    const bd = JSON.stringify(toPlain(daily, 'BD'));
+    expect(bd).not.toContain('mgAmount');
+    expect(bd).toContain('secretNote');
+    expect(JSON.stringify(toPlain(daily, 'OPS'))).toContain('mgAmount');
+
+    const project = { id: 'pp', planId: 'plan', cycleType: 'MONTH', note: '公开', carryoverNote: '内部结转', secretNote: 'x' };
+    expect(toPlain(project, 'CLIENT')).toEqual({ id: 'pp', planId: 'plan', cycleType: 'MONTH', note: '公开' });
+    const projectBd = JSON.stringify(toPlain(project, 'BD'));
+    expect(projectBd).not.toContain('carryoverNote');
+    expect(projectBd).toContain('secretNote');
+
+    const version = { id: 'v', companyId: 'c', version: 2, cycleType: 'MONTH', note: '', carryoverNote: '内部', createdById: 'u' };
+    expect(toPlain(version, 'CLIENT')).toEqual({ id: 'v', companyId: 'c', version: 2, cycleType: 'MONTH', note: '', createdById: 'u' });
+    expect(JSON.stringify(toPlain(version, 'BD'))).not.toContain('carryoverNote');
+  });
+
   it('生产环境缺少合格 JWT_SECRET 时直接报错，开发环境可用默认值', () => {
     process.env.NODE_ENV = 'production';
     delete process.env.JWT_SECRET;

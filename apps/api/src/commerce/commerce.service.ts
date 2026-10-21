@@ -3,7 +3,7 @@ import { ContractStatus, Prisma, SettlementStatus } from '@prisma/client';
 import { CONTRACT_LABEL, SETTLEMENT_LABEL, shanghaiToday } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound, maskAccount } from '../core/access';
-import { hidesCommercialTerms, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
+import { hidesCommercialTerms, policyVersionDto, projectPolicyDto, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { moneyDecimal } from '../core/money';
@@ -139,8 +139,11 @@ export class CommerceService {
       where: { OR: [{ companyId }, { planId: { in: plans.map((item) => item.planId) } }] },
       orderBy: { createdAt: 'desc' },
     });
-    const projects = hidesCommercialTerms(user.role) ? plans.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : plans;
-    return { companyPolicy, projects, versions };
+    const projects = user.role === 'CLIENT'
+      ? plans.map((item) => projectPolicyDto(item as unknown as Record<string, unknown>))
+      : hidesCommercialTerms(user.role) ? plans.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : plans;
+    const visibleVersions = user.role === 'CLIENT' ? versions.map((item) => policyVersionDto(item as unknown as Record<string, unknown>)) : versions;
+    return { companyPolicy, projects, versions: visibleVersions };
   }
 
   async putCompanyPolicy(user: AuthUser, companyId: string, input: z.infer<typeof policySchema>) {

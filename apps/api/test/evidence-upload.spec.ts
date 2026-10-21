@@ -121,7 +121,10 @@ describe('水印工单号、截图打包和未完成分片', () => {
     const clientRows = await authed(client).get('/api/watermarks');
     expect(clientRows.status).toBeLessThan(300);
     expect(clientRows.body.length).toBeGreaterThan(0);
-    for (const row of clientRows.body) expect(row).not.toHaveProperty('originalKey');
+    for (const row of clientRows.body) {
+      expect(row).not.toHaveProperty('originalKey');
+      expect(row).not.toHaveProperty('originalUrl');
+    }
     const denied = await authed(client).post('/api/evidence/archive-zip').send({ fileKeys: [shot.body.watermarkedKey] });
     expect(denied.status).toBe(403);
     const zip = await http.post('/api/evidence/archive-zip').send({ fileKeys: [shot.body.watermarkedKey, done.body.key] }).buffer(true).parse(binaryParser);
