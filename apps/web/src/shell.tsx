@@ -72,7 +72,7 @@ export function Shell() {
       </Sider>
       <Layout>
         <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingInline: 16, backdropFilter: 'blur(16px)', borderBottom: '1px solid var(--ds-border)' }}>
-          <Dropdown menu={{ items: [{ key: 'out', icon: <LogoutOutlined />, label: '退出登录', onClick: () => { logout(); nav('/login'); } }] }}>
+          <Dropdown trigger={['click']} menu={{ items: [{ key: 'out', icon: <LogoutOutlined />, label: '退出登录', onClick: () => { logout(); nav('/login'); } }] }}>
             <Space style={{ cursor: 'pointer' }}>
               <Typography.Text>{user?.name}</Typography.Text>
               <Typography.Text type="secondary">{user ? roleLabel(user.role) : ''}{user?.companyName ? ` · ${user.companyName}` : ''}</Typography.Text>
