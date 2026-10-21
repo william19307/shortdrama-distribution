@@ -27,7 +27,7 @@ export function CompanyPage() {
       contactPhone: next.contactPhone,
     });
     if (next.licenseKey) setLicenseKey(next.licenseKey);
-    if (next.certStatus === 'PENDING' || next.certStatus === 'CHANGE_PENDING') return;
+    if (next.certStatus === 'APPROVED' || next.certStatus === 'PENDING' || next.certStatus === 'CHANGE_PENDING') return;
     const draft = await api<{ currentStep: number; steps: { step1?: { licenseKey?: string; name?: string; creditCode?: string } | null; step2?: { legalPerson?: string; contactName?: string; contactPhone?: string } | null } }>('/company/certification/draft');
     if (draft.steps.step1) {
       form.setFieldsValue(draft.steps.step1);
@@ -68,16 +68,34 @@ export function CompanyPage() {
 
   return (
     <div>
-      <PageHead title="账户中心" hint="企业认证分三步。执照、法人和联系人提交后进入审核，对公账户可以稍后填写。" extra={company ? <Space>{!reviewing && company.certStatus !== 'APPROVED' ? <Button type="primary" onClick={() => setStep(0)}>去认证</Button> : null}<StatusTag status={company.certStatus} /></Space> : null} />
+      <PageHead title="账户中心" hint={company?.certStatus === 'APPROVED' ? '认证信息只可查看。收款账户仍可维护。' : '企业认证分三步。执照、法人和联系人提交后进入审核，对公账户可以稍后填写。'} extra={company ? <Space>{!reviewing && company.certStatus !== 'APPROVED' ? <Button type="primary" onClick={() => setStep(0)}>去认证</Button> : null}<StatusTag status={company.certStatus} /></Space> : null} />
       <ErrorNote error={error} />
-      {company?.certRejectReason ? <p>上次未通过：{company.certRejectReason}</p> : null}
-      <Steps current={reviewing ? 3 : step} style={{ maxWidth: 720, marginBottom: 24 }} items={[
+      {company?.certRejectReason && company.certStatus !== 'APPROVED' ? <p>上次未通过：{company.certRejectReason}</p> : null}
+      <Steps current={company?.certStatus === 'APPROVED' ? 4 : reviewing ? 3 : step} style={{ maxWidth: 720, marginBottom: 24 }} items={[
         { title: '营业执照' },
         { title: '法人与联系人' },
         { title: '对公账户' },
         { title: '审核' },
       ]} />
-      {reviewing ? (
+      {company?.certStatus === 'APPROVED' ? (
+        <div style={{ maxWidth: 640 }}>
+          <h2>认证信息</h2>
+          <p>已认证资料只可查看。</p>
+          {([
+            ['企业名称', company.name],
+            ['统一社会信用代码', company.creditCode || '—'],
+            ['法人', company.legalPerson || '—'],
+            ['联系人', company.contactName || '—'],
+            ['联系电话', company.contactPhone || '—'],
+            ['营业执照', company.licenseKey ? '已上传' : '未上传'],
+          ] as [string, string][]).map(([label, value]) => (
+            <div key={label} style={{ display: 'flex', gap: 16, padding: '8px 0', borderBottom: '1px solid var(--ds-line, #eee)' }}>
+              <span style={{ width: 160, color: 'var(--ds-text-2)' }}>{label}</span>
+              <span>{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : reviewing ? (
         <div>
           <h2>审核中</h2>
           <p>资料已提交。预计 1 个工作日内完成审核，当前进度：审核中。</p>

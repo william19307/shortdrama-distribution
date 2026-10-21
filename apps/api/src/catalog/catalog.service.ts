@@ -116,9 +116,21 @@ export class CatalogService {
 
   async metadataTemplate() {
     const book = new ExcelJS.Workbook();
-    const sheet = book.addWorksheet('元数据');
-    sheet.addRow(['剧名', '语言', '集数', '外文名', '题材', '简介', '标签', '文件名', '集号']);
-    sheet.addRow(['剧A', '英语', 60, 'Drama A', '都市', '', '热门', '第001集.mp4', 1]);
+    const dramas = book.addWorksheet('剧目');
+    dramas.addRow(['剧名', '语言', '集数', '外文名', '题材', '简介', '标签']);
+    dramas.addRow(['剧A', '英语', 60, 'Drama A', '都市', '', '热门']);
+    dramas.getRow(1).font = { bold: true };
+    const files = book.addWorksheet('分集文件');
+    files.addRow(['剧名', '集号', '文件名']);
+    files.addRow(['剧A', 1, '第001集.mp4']);
+    files.getRow(1).font = { bold: true };
+    const notes = book.addWorksheet('说明');
+    notes.addRow(['说明']);
+    notes.addRow(['剧目表必填：剧名、语言、集数。外文名、题材、简介、标签可以不填。']);
+    notes.addRow(['分集文件表用来匹配已经上传的成片。同一行填集号或文件名，文件名优先。']);
+    notes.addRow(['请先看导入预览。有误的行不会写入。']);
+    notes.addRow(['文件夹请按「剧名/第001集.mp4」组织。']);
+    notes.getColumn(1).width = 72;
     return Buffer.from(await book.xlsx.writeBuffer());
   }
 
@@ -135,7 +147,7 @@ export class CatalogService {
     const companyId = this.clientCompany(user);
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(file as unknown as ExcelJS.Buffer);
-    const sheet = book.worksheets[0];
+    const sheet = book.getWorksheet('剧目') || book.worksheets.find((item) => item.name !== '说明' && item.name !== '分集文件') || book.worksheets[0];
     if (!sheet) throw new BadRequestException('工作表为空');
     const header = sheet.getRow(1).values as ExcelJS.CellValue[];
     const col = (name: string) => header.findIndex((cell) => cellText(cell) === name);
@@ -194,6 +206,45 @@ export class CatalogService {
         }
       }
       rows.push({ rowNo, ok: true, error: '', title, action: existing ? '更新' : '新建' });
+    }
+    const episodeSheet = book.getWorksheet('分集文件');
+    if (episodeSheet) {
+      const episodeHeader = episodeSheet.getRow(1).values as ExcelJS.CellValue[];
+      const episodeCol = (name: string) => episodeHeader.findIndex((cell) => cellText(cell) === name);
+      const episodeTitleCol = episodeCol('剧名');
+      const episodeFileCol = episodeCol('文件名');
+      const episodeNoCol = episodeCol('集号');
+      if (episodeTitleCol < 0 || (episodeFileCol < 0 && episodeNoCol < 0)) throw new BadRequestException('分集文件表需要剧名，以及文件名或集号');
+      for (let rowNo = 2; rowNo <= episodeSheet.rowCount; rowNo += 1) {
+        const row = episodeSheet.getRow(rowNo);
+        const title = cellText(row.getCell(episodeTitleCol).value);
+        const fileName = episodeFileCol > 0 ? cellText(row.getCell(episodeFileCol).value) : '';
+        const episodeRaw = episodeNoCol > 0 ? cellText(row.getCell(episodeNoCol).value) : '';
+        if (!title && !fileName && !episodeRaw) continue;
+        const nameNorm = normalizeName(title);
+        const drama = nameNorm ? await this.prisma.drama.findFirst({ where: { companyId, nameNorm } }) : null;
+        if (fileName) {
+          const episode = drama ? await this.prisma.episode.findFirst({ where: { fileName, dramaId: drama.id } }) : null;
+          if (!episode) {
+            rows.push({ rowNo, ok: false, error: `分集文件第 ${rowNo} 行未按文件名匹配到文件`, title });
+            continue;
+          }
+        } else if (episodeRaw) {
+          if (!/^\d+$/.test(episodeRaw) || !drama) {
+            rows.push({ rowNo, ok: false, error: `分集文件第 ${rowNo} 行未按剧名和集号匹配到文件`, title });
+            continue;
+          }
+          const episode = await this.prisma.episode.findFirst({ where: { no: Number(episodeRaw), dramaId: drama.id } });
+          if (!episode) {
+            rows.push({ rowNo, ok: false, error: `分集文件第 ${rowNo} 行未按剧名和集号匹配到文件`, title });
+            continue;
+          }
+        } else {
+          rows.push({ rowNo, ok: false, error: `分集文件第 ${rowNo} 行缺少文件名或集号`, title });
+          continue;
+        }
+        rows.push({ rowNo, ok: true, error: '', title, action: '匹配分集' });
+      }
     }
     if (!rows.length) throw new BadRequestException('没有读到剧目');
     const ready = rows.filter((row) => row.ok).length;

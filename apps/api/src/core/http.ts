@@ -1,4 +1,4 @@
-import { ArgumentsHost, CallHandler, Catch, ExceptionFilter, ExecutionContext, HttpException, HttpStatus, Injectable, NestInterceptor } from '@nestjs/common';
+import { ArgumentsHost, CallHandler, Catch, ExceptionFilter, ExecutionContext, HttpException, HttpStatus, Injectable, NestInterceptor, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { map, Observable } from 'rxjs';
 import { AuthUser } from './auth';
@@ -27,6 +27,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
 export class PlainInterceptor implements NestInterceptor {
   intercept(ctx: ExecutionContext, next: CallHandler): Observable<unknown> {
     const user = ctx.switchToHttp().getRequest().user as AuthUser | undefined;
-    return next.handle().pipe(map((data) => toPlain(data, user?.role)));
+    return next.handle().pipe(map((data) => (data instanceof StreamableFile ? data : toPlain(data, user?.role))));
   }
 }

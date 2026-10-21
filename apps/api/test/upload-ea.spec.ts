@@ -20,6 +20,14 @@ function authed(token: string) {
   };
 }
 
+function xlsx(req: request.Test) {
+  return req.buffer(true).parse((res, callback) => {
+    const chunks: Buffer[] = [];
+    res.on('data', (chunk: Buffer | string) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    res.on('end', () => callback(null, Buffer.concat(chunks)));
+  });
+}
+
 async function login(email: string) {
   const res = await request(app.getHttpServer()).post('/api/auth/login').send({ email, password: PASS });
   expect(res.status).toBeLessThan(300);
@@ -103,6 +111,29 @@ describe('技术校验拦发行、元数据预览、筛选全选、认证草稿�
   afterAll(async () => {
     await app.close();
     await prisma.$disconnect();
+  });
+
+  it('B5-01 元数据模板和结算模板返回 xlsx', async () => {
+    const meta = await xlsx(authed(clientToken).get('/api/dramas/metadata-template'));
+    expect(meta.status).toBeLessThan(300);
+    expect(meta.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(meta.headers['content-disposition']).toContain('attachment');
+    expect(meta.headers['content-disposition']).toContain('metadata-template.xlsx');
+    const metaBytes = meta.body as Buffer;
+    expect(metaBytes.subarray(0, 2).toString()).toBe('PK');
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(metaBytes as unknown as ExcelJS.Buffer);
+    expect(book.worksheets.map((sheet) => sheet.name)).toEqual(['剧目', '分集文件', '说明']);
+    const settlement = await xlsx(authed(opsToken).get('/api/settlements/amount-template'));
+    expect(settlement.status).toBeLessThan(300);
+    expect(settlement.headers['content-type']).toContain('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    expect(settlement.headers['content-disposition']).toContain('attachment');
+    expect(settlement.headers['content-disposition']).toContain('settlement-amounts.xlsx');
+    const settlementBytes = settlement.body as Buffer;
+    expect(settlementBytes.subarray(0, 2).toString()).toBe('PK');
+    const settlementBook = new ExcelJS.Workbook();
+    await settlementBook.xlsx.load(settlementBytes as unknown as ExcelJS.Buffer);
+    expect(settlementBook.worksheets.map((sheet) => sheet.name)).toContain('结算单');
   });
 
   it('VL-06 校验失败拦发行，未校验的历史成片仍可申请', async () => {
