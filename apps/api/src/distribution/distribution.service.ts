@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import {
   BLOCKING_PLAN_STATUSES,
@@ -36,7 +37,7 @@ export class DistributionService {
     private readonly audit: AuditService,
   ) {}
 
-  async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }) {
+  async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }, options?: { recordFailure?: boolean }) {
     if (user.role !== 'CLIENT' || !user.companyId) throw new ForbiddenException('只有客户可以申请发行');
     return this.prisma.$transaction(async (tx) => {
       if (input.idempotencyKey) {
@@ -65,6 +66,9 @@ export class DistributionService {
 
       const targets = await this.resolvePlatforms(tx, input);
       if (problems.length) {
+        if (options?.recordFailure === false) {
+          return { id: '', status: 'PRECHECK_FAILED' as const, precheckNote: problems.join('；'), drama: { id: drama.id, title: drama.title, code: drama.code } };
+        }
         const plan = await tx.distributionPlan.create({
           data: {
             code: await nextCode(tx, 'PL'),
@@ -122,6 +126,25 @@ export class DistributionService {
       await this.saveIdem(tx, user.id, input.idempotencyKey, body);
       return body;
     });
+  }
+
+  async createPlans(user: AuthUser, input: { dramaIds: string[]; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[] }) {
+    if (user.role !== 'CLIENT' || !user.companyId) throw new ForbiddenException('只有客户可以申请发行');
+    if (input.dramaIds.length > 200) throw new BadRequestException('单次最多申请 200 部');
+    const submitted = [];
+    const needsAction: { dramaId: string; title: string; reason: string; href: string }[] = [];
+    for (const dramaId of input.dramaIds) {
+      try {
+        const body = await this.createPlan(user, { dramaId, round: input.round, platformIds: input.platformIds, customPlatforms: input.customPlatforms }, { recordFailure: false }) as { status?: string; precheckNote?: string | null; drama?: { title?: string } | null } | null;
+        if (body?.status === 'PRECHECK_FAILED') {
+          needsAction.push({ dramaId, title: body.drama?.title || '', reason: body.precheckNote || '预检未通过', href: `/dramas/${dramaId}` });
+        } else submitted.push(body);
+      } catch (error) {
+        if (!(error instanceof BadRequestException) && !(error instanceof ForbiddenException)) throw error;
+        needsAction.push({ dramaId, title: '', reason: error.message, href: `/dramas/${dramaId}` });
+      }
+    }
+    return { submittedCount: submitted.length, needsActionCount: needsAction.length, submitted, needsAction };
   }
 
   async listPlans(user: AuthUser, query: { page: number; pageSize: number; status?: string; companyId?: string }) {
@@ -398,6 +421,213 @@ export class DistributionService {
     return this.getPlan(user, listing.planId);
   }
 
+  async batchPass(user: AuthUser, planIds: string[]) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER']);
+    const passed: { id: string; code: string }[] = [];
+    const skipped: { id: string; code: string; reason: string }[] = [];
+    for (const planId of planIds) {
+      const plan = await this.prisma.distributionPlan.findUnique({ where: { id: planId }, include: planInclude });
+      if (!plan) {
+        skipped.push({ id: planId, code: '', reason: '工单不存在' });
+        continue;
+      }
+      if (user.role === 'OPS' && plan.assigneeId !== user.id) {
+        try {
+          assertCompanyAccess(user, plan.company);
+        } catch {
+          skipped.push({ id: plan.id, code: plan.code, reason: '不在你的队列' });
+          continue;
+        }
+      }
+      if (plan.status !== 'IN_REVIEW') {
+        skipped.push({ id: plan.id, code: plan.code, reason: '抽检未完成' });
+        continue;
+      }
+      const episodes = await this.prisma.episode.findMany({ where: { dramaId: plan.dramaId, reviewStatus: { not: 'UNSAMPLED' } } });
+      if (episodes.some((episode) => episode.reviewStatus === 'PENDING' || episode.reviewStatus === 'REPLACED')) {
+        skipped.push({ id: plan.id, code: plan.code, reason: '抽检未完成' });
+        continue;
+      }
+      if (episodes.some((episode) => episode.reviewStatus === 'REJECTED')) {
+        skipped.push({ id: plan.id, code: plan.code, reason: '有问题集，已跳过' });
+        continue;
+      }
+      await this.prisma.distributionPlan.update({ where: { id: plan.id }, data: { status: 'SHARE_CONFIG', slaDueAt: addBusinessDays(new Date(), 1) } });
+      await this.audit.write(user.id, 'review.batch_pass', 'DistributionPlan', plan.id);
+      passed.push({ id: plan.id, code: plan.code });
+    }
+    return { passed, skipped, passedCount: passed.length, skippedCount: skipped.length };
+  }
+
+  listTemplates() {
+    return this.prisma.shareTemplate.findMany({ orderBy: [{ name: 'asc' }, { version: 'desc' }] });
+  }
+
+  async createTemplate(user: AuthUser, input: { name: string; mode: 'MG' | 'MG_OVER' | 'NO_MG'; clientRate: string; overRate?: string; guaranteeAmount?: string; guaranteeCurrency?: string; guaranteePeriodDays?: number; note?: string }) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER']);
+    if ((input.mode === 'MG' || input.mode === 'MG_OVER') && !input.guaranteeAmount) throw new BadRequestException('保底和超保底需要填写保底金额');
+    if (input.mode === 'MG_OVER' && !input.overRate) throw new BadRequestException('超保底需要填写超出部分的分成比例');
+    const last = await this.prisma.shareTemplate.aggregate({ where: { name: input.name }, _max: { version: true } });
+    return this.prisma.shareTemplate.create({
+      data: {
+        name: input.name,
+        version: (last._max.version ?? 0) + 1,
+        note: input.note ?? '',
+        mode: input.mode,
+        clientRate: new Prisma.Decimal(input.clientRate),
+        overRate: input.overRate ? new Prisma.Decimal(input.overRate) : null,
+        guaranteeAmount: input.mode === 'NO_MG' ? null : moneyDecimal(input.guaranteeAmount!),
+        guaranteeCurrency: input.mode === 'NO_MG' ? null : input.guaranteeCurrency || 'CNY',
+        guaranteePeriodDays: input.mode === 'NO_MG' ? null : input.guaranteePeriodDays,
+        createdById: user.id,
+      },
+    });
+  }
+
+  async previewTemplate(user: AuthUser, templateId: string, planIds: string[]) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER']);
+    const template = assertFound(await this.prisma.shareTemplate.findUnique({ where: { id: templateId } }), '分成模板不存在');
+    const items = [];
+    for (const planId of planIds) {
+      items.push(await this.classifyTemplate(user, planId));
+    }
+    return {
+      template: { id: template.id, name: template.name, version: template.version },
+      items,
+      summary: {
+        created: items.filter((item) => item.kind === 'NEW').length,
+        overwrite: items.filter((item) => item.kind === 'OVERWRITE').length,
+        skip: items.filter((item) => item.kind === 'SKIP').length,
+      },
+    };
+  }
+
+  async applyTemplate(user: AuthUser, templateId: string, planIds: string[]) {
+    const preview = await this.previewTemplate(user, templateId, planIds);
+    const template = assertFound(await this.prisma.shareTemplate.findUnique({ where: { id: templateId } }), '分成模板不存在');
+    const applied: string[] = [];
+    for (const item of preview.items) {
+      if (item.kind === 'SKIP') continue;
+      const plan = assertFound(await this.prisma.distributionPlan.findUnique({ where: { id: item.planId }, include: { platforms: true } }), '工单不存在');
+      await this.prisma.$transaction(async (tx) => {
+        for (const platform of plan.platforms) {
+          await tx.shareConfig.upsert({
+            where: { planId_platformId: { planId: plan.id, platformId: platform.platformId } },
+            create: {
+              planId: plan.id,
+              platformId: platform.platformId,
+              mode: template.mode,
+              clientRate: template.clientRate,
+              overRate: template.overRate,
+              guaranteeAmount: template.guaranteeAmount,
+              guaranteeCurrency: template.guaranteeCurrency,
+              guaranteePeriodDays: template.guaranteePeriodDays,
+              reviewStatus: 'PENDING',
+              submittedById: user.id,
+            },
+            update: {
+              mode: template.mode,
+              clientRate: template.clientRate,
+              overRate: template.overRate,
+              guaranteeAmount: template.guaranteeAmount,
+              guaranteeCurrency: template.guaranteeCurrency,
+              guaranteePeriodDays: template.guaranteePeriodDays,
+              reviewStatus: 'PENDING',
+              submittedById: user.id,
+              reviewedById: null,
+              reviewNote: null,
+            },
+          });
+        }
+        await tx.distributionPlan.update({ where: { id: plan.id }, data: { status: 'SHARE_REVIEW' } });
+      });
+      applied.push(plan.id);
+    }
+    await this.audit.write(user.id, 'share.template.apply', 'ShareTemplate', template.id, { applied: applied.length, skipped: preview.summary.skip });
+    return { ...preview, appliedCount: applied.length, status: 'SHARE_REVIEW' };
+  }
+
+  async listingTemplate() {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet('上架结果');
+    sheet.addRow(['剧ID', '平台', '平台剧ID', '上架时间', '链接']);
+    sheet.addRow(['D00001', 'ReelShort', 'RS-10001', '2026-10-21', 'https://example.com/drama']);
+    return Buffer.from(await book.xlsx.writeBuffer());
+  }
+
+  async importListings(user: AuthUser, file: Buffer) {
+    assertBusinessWrite(user);
+    assertRole(user, ['BD', 'OPS', 'OPS_MANAGER']);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(file as unknown as ExcelJS.Buffer);
+    const sheet = book.worksheets[0];
+    if (!sheet) throw new BadRequestException('工作表为空');
+    const rows: { rowNo: number; ok: boolean; error: string; dramaCode: string; platformName: string }[] = [];
+    for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo += 1) {
+      const row = sheet.getRow(rowNo);
+      const dramaToken = cellText(row.getCell(1).value);
+      const platformName = cellText(row.getCell(2).value);
+      const platformDramaId = cellText(row.getCell(3).value);
+      const listedAt = cellText(row.getCell(4).value);
+      const listingUrl = cellText(row.getCell(5).value);
+      if (!dramaToken && !platformName && !platformDramaId) continue;
+      const fail = (error: string) => rows.push({ rowNo, ok: false, error, dramaCode: dramaToken, platformName });
+      if (!dramaToken || !platformName || !platformDramaId || !listedAt || !listingUrl) {
+        fail('剧 ID、平台、平台剧 ID、上架时间、链接都要填');
+        continue;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(listedAt)) {
+        fail(`第 ${rowNo} 行上架时间格式应为 YYYY-MM-DD`);
+        continue;
+      }
+      const drama = await this.prisma.drama.findFirst({ where: { OR: [{ id: dramaToken }, { code: dramaToken }] } });
+      if (!drama) {
+        fail(`第 ${rowNo} 行剧不存在`);
+        continue;
+      }
+      const platform = await this.prisma.platform.findFirst({ where: { OR: [{ name: platformName }, { code: platformName }] } });
+      if (!platform) {
+        fail(`第 ${rowNo} 行平台不存在`);
+        continue;
+      }
+      const listing = await this.prisma.planPlatform.findFirst({
+        where: { platformId: platform.id, plan: { dramaId: drama.id, status: { in: ['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'] } } },
+        orderBy: { plan: { updatedAt: 'desc' } },
+      });
+      if (!listing) {
+        fail(`第 ${rowNo} 行没有可录入的上架记录`);
+        continue;
+      }
+      try {
+        await this.patchListing(user, listing.id, { status: 'LISTED', platformDramaId, listingUrl, listedAt });
+        rows.push({ rowNo, ok: true, error: '', dramaCode: drama.code, platformName: platform.name });
+      } catch (error) {
+        fail(error instanceof Error ? error.message : `第 ${rowNo} 行没有录入`);
+      }
+    }
+    if (!rows.length) throw new BadRequestException('没有读到上架结果');
+    return { rows, applied: rows.filter((row) => row.ok).length, failed: rows.filter((row) => !row.ok).length };
+  }
+
+  private async classifyTemplate(user: AuthUser, planId: string) {
+    const plan = await this.prisma.distributionPlan.findUnique({ where: { id: planId }, include: { shares: true, drama: { select: { title: true } }, company: true } });
+    if (!plan) return { planId, code: '', title: '', kind: 'SKIP' as const, reason: '工单不存在' };
+    if (user.role === 'OPS' && plan.assigneeId !== user.id) {
+      try {
+        assertCompanyAccess(user, plan.company);
+      } catch {
+        return { planId, code: plan.code, title: plan.drama.title, kind: 'SKIP' as const, reason: '不在你的队列' };
+      }
+    }
+    if (!['SHARE_CONFIG', 'SHARE_REVIEW'].includes(plan.status)) {
+      return { planId, code: plan.code, title: plan.drama.title, kind: 'SKIP' as const, reason: '当前状态不能套用分成' };
+    }
+    return { planId, code: plan.code, title: plan.drama.title, kind: plan.shares.length ? 'OVERWRITE' as const : 'NEW' as const, reason: '' };
+  }
+
   private async resolvePlatforms(tx: Prisma.TransactionClient, input: { round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[] }) {
     if (input.round === 'FIRST') {
       const required = await tx.platform.findMany({ where: { firstBatch: true, enabled: true }, orderBy: { sort: 'asc' } });
@@ -568,6 +798,14 @@ export class DistributionService {
       update: { body: plain },
     });
   }
+}
+
+function cellText(value: ExcelJS.CellValue): string {
+  if (value == null) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'object' && 'text' in value && value.text) return String(value.text).trim();
+  if (typeof value === 'object' && 'result' in value) return cellText(value.result as ExcelJS.CellValue);
+  return String(value).trim();
 }
 
 function slaTier(submittedAt: Date | null, slaDueAt: Date | null, now: number, warnRatio: number, doubleRatio: number) {

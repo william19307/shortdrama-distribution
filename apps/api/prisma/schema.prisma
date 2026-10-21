@@ -1008,3 +1008,20 @@ model SettlementImportRow {
 
   @@index([batchId, kind])
 }
+
+model ShareTemplate {
+  id                  String    @id @default(cuid())
+  name                String
+  version             Int       @default(1)
+  note                String    @default("")
+  mode                ShareMode
+  clientRate          Decimal   @db.Decimal(6, 2)
+  overRate            Decimal?  @db.Decimal(6, 2)
+  guaranteeAmount     Decimal?  @db.Decimal(18, 2)
+  guaranteeCurrency   String?
+  guaranteePeriodDays Int?
+  createdById         String
+  createdAt           DateTime  @default(now())
+
+  @@index([name, version])
+}

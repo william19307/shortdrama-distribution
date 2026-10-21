@@ -144,6 +144,47 @@ export const shareReviewSchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
+export const reviewBatchPassSchema = z.object({
+  planIds: z.array(z.string().min(1)).min(1).max(200),
+});
+
+export const shareTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(40),
+  mode: z.enum(SHARE_MODES),
+  clientRate: rateStr,
+  overRate: rateStr.optional(),
+  guaranteeAmount: decimalStr.optional(),
+  guaranteeCurrency: z.string().max(8).optional(),
+  guaranteePeriodDays: z.number().int().positive().max(3650).optional(),
+  note: z.string().max(200).optional(),
+});
+
+export const shareTemplateApplySchema = z.object({
+  planIds: z.array(z.string().min(1)).min(1).max(200),
+});
+
+export const planBatchSchema = z.object({
+  dramaIds: z.array(z.string().min(1)).min(1).max(500),
+  round: z.enum(PLAN_ROUNDS),
+  platformIds: z.array(z.string()).optional(),
+  customPlatforms: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+});
+
+export const dramaSelectionSchema = z.object({
+  q: z.string().max(120).optional(),
+  phase: z.enum(['action', 'review', 'ready', 'live', 'offline', 'withdrawn', 'idle']).optional(),
+  genre: z.string().optional(),
+  language: z.string().optional(),
+  companyId: z.string().optional(),
+  ids: z.array(z.string()).max(5000).optional(),
+});
+
+export const dramaBatchSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(5000),
+  tag: z.string().trim().min(1).max(20).optional(),
+  group: z.string().trim().min(1).max(40).optional(),
+});
+
 export const listingPatchSchema = z.object({
   status: z.enum(LISTING_STATUSES),
   platformDramaId: z.string().max(80).optional(),

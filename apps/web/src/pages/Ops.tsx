@@ -1,10 +1,10 @@
 import { motion as motionTokens } from '@ds/tokens';
-import { App, Button, Card, Drawer, Form, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Upload } from 'antd';
+import { App, Button, Card, Drawer, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Upload } from 'antd';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, SHARE_MODE_LABEL } from '@shortform/shared';
-import { api, getToken, qs, uploadFile, type Page } from '../api';
+import { api, download, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNote, PageHead, PlatformChip, StatusTag, dayText, labelOf } from '../ui';
 
@@ -155,6 +155,8 @@ export function ReviewsPage() {
   const [status, setStatus] = useState<string>();
   const [reason, setReason] = useState('画面或字幕需要修改');
   const [error, setError] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [batchNote, setBatchNote] = useState('');
   const [sla, setSla] = useState<{ summary: { total: number; warn80: number; overdue: number; double: number } } | null>(null);
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [status]);
@@ -174,6 +176,18 @@ export function ReviewsPage() {
     <div>
       <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。主管可以把待审单分派给专员。" />
       <ErrorNote error={error} />
+      {picked.length ? <Space wrap style={{ marginBottom: 12 }}>
+        <b>已选 {picked.length}</b>
+        <Button type="primary" disabled={viewOnly} onClick={async () => {
+          try {
+            const res = await api<{ passed: { code: string }[]; skipped: { code: string; reason: string }[] }>('/reviews/batch-pass', { method: 'POST', json: { planIds: picked } });
+            setBatchNote(`通过 ${res.passed.length} 部。${res.skipped.map((item) => `${item.code || '工单'}：${item.reason}`).join('；')}`);
+            setPicked([]);
+            load();
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); }
+        }}>批量通过</Button>
+        {batchNote ? <span>{batchNote}</span> : null}
+      </Space> : null}
       {sla ? <Space wrap style={{ marginBottom: 12 }}>
         <Tag>在审 {sla.summary.total}</Tag>
         <Tag color="gold">80%预警 {sla.summary.warn80}</Tag>
@@ -192,7 +206,7 @@ export function ReviewsPage() {
       />
       <AnimatePresence mode="wait">
         <motion.div key={status || 'ALL'} {...motionTokens.presets.page}>
-      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} onRow={(row) => ({ onClick: () => nav(`/reviews/${row.id}`), style: { cursor: 'pointer' } })} columns={[
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} rowSelection={{ selectedRowKeys: picked, onChange: (keys) => setPicked(keys.map(String)) }} onRow={(row) => ({ onClick: () => nav(`/reviews/${row.id}`), style: { cursor: 'pointer' } })} columns={[
         { title: '单号', dataIndex: 'code', className: 'ds-num' },
         {
           title: '剧',
@@ -261,6 +275,10 @@ export function SharesPage() {
   const [plan, setPlan] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [error, setError] = useState('');
+  const [picked, setPicked] = useState<string[]>([]);
+  const [templates, setTemplates] = useState<{ id: string; name: string; version: number }[]>([]);
+  const [preview, setPreview] = useState<{ templateId: string; items: { planId: string; title: string; kind: string; reason: string }[] } | null>(null);
+  useEffect(() => { api<{ id: string; name: string; version: number }[]>('/share-templates').then(setTemplates).catch(() => undefined); }, []);
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -280,12 +298,54 @@ export function SharesPage() {
     <div>
       <PageHead title="分成与上架" hint="保底金额只在内部填写，客户看到的是分成比例。结转按项目记一句话，不参与金额计算。" />
       <ErrorNote error={error} />
-      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} onRow={(row) => ({ onClick: () => nav(`/shares/${row.id}`), style: { cursor: 'pointer' } })} columns={[
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Upload showUploadList={false} accept=".xlsx" beforeUpload={async (file) => {
+          try {
+            const body = new FormData();
+            body.append('file', file);
+            const res = await api<{ applied: number; failed: number; rows: { rowNo: number; error: string }[] }>('/listings/import', { method: 'POST', body });
+            message.success(`已录入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}`);
+            if (res.failed) setError(res.rows.filter((row) => row.error).map((row) => `第 ${row.rowNo} 行 ${row.error}`).join('；'));
+            load();
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有导入'); }
+          return false;
+        }}><Button disabled={viewOnly}>导入上架结果</Button></Upload>
+        <Button onClick={() => download('/listings/template', 'listing-template.xlsx')}>下载上架模板</Button>
+        <Select style={{ width: 220 }} placeholder="分成模板" options={templates.map((item) => ({ value: item.id, label: `${item.name} v${item.version}` }))} onChange={async (templateId) => {
+          if (!picked.length) { message.error('请先勾选剧'); return; }
+          const res = await api<{ items: { planId: string; title: string; kind: string; reason: string }[] }>(`/share-templates/${templateId}/preview`, { method: 'POST', json: { planIds: picked } });
+          setPreview({ templateId, items: res.items });
+        }} />
+        <Form layout="inline" onFinish={async (values) => {
+          try { await api('/share-templates', { method: 'POST', json: values }); message.success('模板已保存'); setTemplates(await api('/share-templates')); }
+          catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+        }}>
+          <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="模板名" /></Form.Item>
+          <Form.Item name="mode" initialValue="NO_MG"><Select style={{ width: 120 }} options={[{ value: 'NO_MG', label: '无保底' }, { value: 'MG', label: '保底' }, { value: 'MG_OVER', label: '超保底' }]} /></Form.Item>
+          <Form.Item name="clientRate" initialValue="50"><Input placeholder="比例" style={{ width: 80 }} /></Form.Item>
+          <Button htmlType="submit" disabled={viewOnly}>存为模板</Button>
+        </Form>
+      </Space>
+      <Table rowKey="id" dataSource={rows?.items || []} pagination={false} rowSelection={{ selectedRowKeys: picked, onChange: (keys) => setPicked(keys.map(String)) }} onRow={(row) => ({ onClick: () => nav(`/shares/${row.id}`), style: { cursor: 'pointer' } })} columns={[
         { title: '单号', dataIndex: 'code' },
         { title: '剧', dataIndex: ['drama', 'title'] },
         { title: '客户', dataIndex: ['company', 'name'] },
         { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
       ]} />
+      <Modal title="分成差异" open={Boolean(preview)} onCancel={() => setPreview(null)} okText="提交套用" onOk={async () => {
+        if (!preview) return;
+        const res = await api<{ appliedCount: number; summary: { skip: number } }>(`/share-templates/${preview.templateId}/apply`, { method: 'POST', json: { planIds: picked } });
+        message.success(`已套用 ${res.appliedCount} 部，跳过 ${res.summary.skip} 部，进入分成待复核`);
+        setPreview(null);
+        setPicked([]);
+        load();
+      }}>
+        <Table size="small" rowKey="planId" pagination={false} dataSource={preview?.items || []} columns={[
+          { title: '剧', dataIndex: 'title' },
+          { title: '差异', dataIndex: 'kind', render: (value: string) => ({ NEW: '新配置', OVERWRITE: '覆盖已有', SKIP: '跳过' }[value] || value) },
+          { title: '说明', dataIndex: 'reason' },
+        ]} />
+      </Modal>
       {plan ? (
         <Card title={plan.drama.title} style={{ marginTop: 16 }}>
           {plan.platforms.map((item) => {

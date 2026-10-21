@@ -38,7 +38,7 @@ const STAFF_ITEMS: Item[] = [
   { key: '/companies', icon: <TeamOutlined />, label: '客户与资质', roles: ['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'] },
   { key: '/dramas', icon: <VideoCameraOutlined />, label: '视频库', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
   { key: '/reviews', icon: <AuditOutlined />, label: '审核队列', roles: ['OPS', 'OPS_MANAGER', 'ADMIN'] },
-  { key: '/shares', icon: <AccountBookOutlined />, label: '分成与上架', roles: ['OPS', 'OPS_MANAGER', 'ADMIN'] },
+  { key: '/shares', icon: <AccountBookOutlined />, label: '分成与上架', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
   { key: '/daily', icon: <DashboardOutlined />, label: '数据同步', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
   { key: '/watermarks', icon: <CameraOutlined />, label: '防伪截图', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
   { key: '/settlements', icon: <AccountBookOutlined />, label: '结算复核', roles: ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'] },

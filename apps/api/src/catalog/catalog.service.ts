@@ -4,9 +4,11 @@ import {
   PART_SIZE,
   SINGLE_PUT_MAX,
   clientPhaseFromPlans,
+  dramaBatchSchema,
   dramaCreateSchema,
   dramaListSchema,
   dramaPatchSchema,
+  dramaSelectionSchema,
   normalizeName,
   uploadInitSchema,
   type DramaListQuery,
@@ -46,8 +48,34 @@ export class CatalogService {
     return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
-  async exportCsv(user: AuthUser, query: DramaListQuery) {
+  async selection(user: AuthUser, input: z.infer<typeof dramaSelectionSchema>) {
+    const where = this.whereFor(user, this.asListQuery(input));
+    const total = await this.prisma.drama.count({ where });
+    if (total > 5000) throw new BadRequestException('超过 5000 部，请缩小筛选后再全选');
+    const rows = await this.prisma.drama.findMany({ where, select: { id: true }, orderBy: { updatedAt: 'desc' } });
+    return { ids: rows.map((row) => row.id), total };
+  }
+
+  async batchMeta(user: AuthUser, input: z.infer<typeof dramaBatchSchema>) {
+    if (!input.tag && !input.group) throw new BadRequestException('请填写标签或分组');
+    const where = this.whereFor(user, this.asListQuery({}));
+    where.id = { in: input.ids };
+    const dramas = await this.prisma.drama.findMany({ where, select: { id: true, tags: true, groups: true } });
+    for (const drama of dramas) {
+      await this.prisma.drama.update({
+        where: { id: drama.id },
+        data: {
+          tags: input.tag && !drama.tags.includes(input.tag) ? [...drama.tags, input.tag] : undefined,
+          groups: input.group && !drama.groups.includes(input.group) ? [...drama.groups, input.group] : undefined,
+        },
+      });
+    }
+    return { updated: dramas.length };
+  }
+
+  async exportCsv(user: AuthUser, query: DramaListQuery & { ids?: string[] }) {
     const where = this.whereFor(user, query);
+    if (query.ids?.length) where.id = { in: query.ids };
     const total = await this.prisma.drama.count({ where });
     if (total > 5000) throw new BadRequestException('超过 5000 行，请缩小筛选后再导出');
     const rows = await this.prisma.drama.findMany({
@@ -357,6 +385,10 @@ export class CatalogService {
   private clientCompany(user: AuthUser) {
     if (user.role !== 'CLIENT' || !user.companyId) throw new ForbiddenException('只有客户可以新建剧目');
     return user.companyId;
+  }
+
+  private asListQuery(input: z.infer<typeof dramaSelectionSchema>): DramaListQuery {
+    return { page: 1, pageSize: 20, sort: 'updatedAt', order: 'desc', q: input.q, phase: input.phase, genre: input.genre, language: input.language, companyId: input.companyId };
   }
 
   private whereFor(user: AuthUser, query: DramaListQuery): Prisma.DramaWhereInput {

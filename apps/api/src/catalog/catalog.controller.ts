@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
-import { dramaCreateSchema, dramaListSchema, dramaPatchSchema, partAckSchema, partSignSchema, uploadCompleteSchema, uploadInitSchema } from '@shortform/shared';
+import { dramaBatchSchema, dramaCreateSchema, dramaListSchema, dramaPatchSchema, dramaSelectionSchema, partAckSchema, partSignSchema, uploadCompleteSchema, uploadInitSchema } from '@shortform/shared';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
@@ -19,6 +19,24 @@ export class CatalogController {
   @Get('dramas/export')
   async export(@CurrentUser() user: AuthUser, @Query(new ZodPipe(dramaListSchema)) query: z.infer<typeof dramaListSchema>, @Res() res: Response) {
     const csv = await this.catalog.exportCsv(user, query);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="dramas.csv"');
+    res.send(`\uFEFF${csv}`);
+  }
+
+  @Post('dramas/selection')
+  selection(@CurrentUser() user: AuthUser, @Body(new ZodPipe(dramaSelectionSchema)) body: z.infer<typeof dramaSelectionSchema>) {
+    return this.catalog.selection(user, body);
+  }
+
+  @Post('dramas/batch')
+  batch(@CurrentUser() user: AuthUser, @Body(new ZodPipe(dramaBatchSchema)) body: z.infer<typeof dramaBatchSchema>) {
+    return this.catalog.batchMeta(user, body);
+  }
+
+  @Post('dramas/export')
+  async exportSelected(@CurrentUser() user: AuthUser, @Body(new ZodPipe(dramaSelectionSchema)) body: z.infer<typeof dramaSelectionSchema>, @Res() res: Response) {
+    const csv = await this.catalog.exportCsv(user, { page: 1, pageSize: 20, sort: 'updatedAt', order: 'desc', ...body });
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="dramas.csv"');
     res.send(`\uFEFF${csv}`);
