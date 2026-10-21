@@ -79,14 +79,14 @@ export function CompanyPage() {
               <p>把营业执照拖到这里，或点击上传</p>
               {licenseKey || company?.licenseKey ? <p>已上传</p> : null}
             </Upload.Dragger>
-            <Form.Item name="name" label="企业名称" rules={[{ required: true, min: 2 }]} style={{ marginTop: 16 }}><Input /></Form.Item>
-            <Form.Item name="creditCode" label="统一社会信用代码" rules={[{ required: true, len: 18 }]}><Input /></Form.Item>
+            <Form.Item name="name" label="企业名称" rules={[{ required: true, message: '请填写企业名称' }, { min: 2, message: '企业名称至少 2 个字' }]} style={{ marginTop: 16 }}><Input /></Form.Item>
+            <Form.Item name="creditCode" label="统一社会信用代码" rules={[{ required: true, message: '请填写统一社会信用代码' }, { len: 18, message: '统一社会信用代码为 18 位' }]}><Input /></Form.Item>
             <Button type="primary" onClick={() => form.validateFields(['name', 'creditCode']).then(() => setStep(1)).catch(() => undefined)}>下一步</Button>
           </div>
           <div style={{ display: step === 1 ? 'block' : 'none' }}>
-            <Form.Item name="legalPerson" label="法人" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="contactName" label="联系人" rules={[{ required: true }]}><Input /></Form.Item>
-            <Form.Item name="contactPhone" label="联系电话" rules={[{ required: true }]}><Input /></Form.Item>
+            <Form.Item name="legalPerson" label="法人" rules={[{ required: true, message: '请填写法人' }]}><Input /></Form.Item>
+            <Form.Item name="contactName" label="联系人" rules={[{ required: true, message: '请填写联系人' }]}><Input /></Form.Item>
+            <Form.Item name="contactPhone" label="联系电话" rules={[{ required: true, message: '请填写联系电话' }]}><Input /></Form.Item>
             <Space>
               <Button onClick={() => setStep(0)}>上一步</Button>
               <Button type="primary" onClick={() => form.validateFields(['legalPerson', 'contactName', 'contactPhone']).then(() => setStep(2)).catch(() => undefined)}>下一步</Button>
