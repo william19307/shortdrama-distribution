@@ -37,7 +37,7 @@ export class DistributionService {
     private readonly audit: AuditService,
   ) {}
 
-  async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }, options?: { recordFailure?: boolean }) {
+  async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }) {
     if (user.role !== 'CLIENT' || !user.companyId) throw new ForbiddenException('只有客户可以申请发行');
     return this.prisma.$transaction(async (tx) => {
       if (input.idempotencyKey) {
@@ -66,22 +66,7 @@ export class DistributionService {
 
       const targets = await this.resolvePlatforms(tx, input);
       if (problems.length) {
-        if (options?.recordFailure === false) {
-          return { id: '', status: 'PRECHECK_FAILED' as const, precheckNote: problems.join('；'), drama: { id: drama.id, title: drama.title, code: drama.code } };
-        }
-        const plan = await tx.distributionPlan.create({
-          data: {
-            code: await nextCode(tx, 'PL'),
-            dramaId: drama.id,
-            companyId: drama.companyId,
-            round: input.round,
-            status: 'PRECHECK_FAILED',
-            precheckNote: problems.join('；'),
-          },
-        });
-        const body = await this.present(tx, plan.id, user);
-        await this.saveIdem(tx, user.id, input.idempotencyKey, body);
-        return body;
+        return { id: '', status: 'PRECHECK_FAILED' as const, precheckNote: problems.join('；'), drama: { id: drama.id, title: drama.title, code: drama.code } };
       }
 
       const allApproved = readyEpisodes.length > 0 && readyEpisodes.every((episode) => episode.reviewStatus === 'APPROVED');
@@ -135,7 +120,7 @@ export class DistributionService {
     const needsAction: { dramaId: string; title: string; reason: string; href: string }[] = [];
     for (const dramaId of input.dramaIds) {
       try {
-        const body = await this.createPlan(user, { dramaId, round: input.round, platformIds: input.platformIds, customPlatforms: input.customPlatforms }, { recordFailure: false }) as { status?: string; precheckNote?: string | null; drama?: { title?: string } | null } | null;
+        const body = await this.createPlan(user, { dramaId, round: input.round, platformIds: input.platformIds, customPlatforms: input.customPlatforms }) as { status?: string; precheckNote?: string | null; drama?: { title?: string } | null } | null;
         if (body?.status === 'PRECHECK_FAILED') {
           needsAction.push({ dramaId, title: body.drama?.title || '', reason: body.precheckNote || '预检未通过', href: `/dramas/${dramaId}` });
         } else submitted.push(body);
