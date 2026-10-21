@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { batchRejectSchema, episodeDecisionSchema, listingPatchSchema, planBatchSchema, planCreateSchema, rejectReasonPatchSchema, rejectReasonSchema, reviewBatchPassSchema, reviewReassignSchema, sharePutSchema, shareReviewSchema, shareTemplateApplySchema, shareTemplateSchema, spotCheckSchema } from '@shortform/shared';
+import { batchRejectSchema, episodeDecisionSchema, listingBatchSchema, listingPatchSchema, planBatchSchema, planCreateSchema, rejectReasonPatchSchema, rejectReasonSchema, reviewBatchPassSchema, reviewReassignSchema, sharePutSchema, shareReviewSchema, shareTemplateApplySchema, shareTemplateSchema, spotCheckSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -152,6 +152,11 @@ export class DistributionController {
   @Post('reviews/:id/finish')
   finish(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.distribution.finish(user, id);
+  }
+
+  @Post('listings/batch')
+  batchListings(@CurrentUser() user: AuthUser, @Body(new ZodPipe(listingBatchSchema)) body: z.infer<typeof listingBatchSchema>) {
+    return this.distribution.batchListings(user, body);
   }
 
   @Patch('listings/:id')

@@ -7,6 +7,7 @@ import { assertFound } from '../core/access';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
+import { StorageService } from '../core/storage.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SettingsService } from '../core/settings.service';
 
@@ -17,6 +18,7 @@ export class AdminService {
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly storage: StorageService,
   ) {}
 
   async workbench(user: AuthUser) {
@@ -92,20 +94,46 @@ export class AdminService {
     return this.settings.put(input, user.id);
   }
 
-  platforms() {
-    return this.prisma.platform.findMany({
+  async platforms() {
+    const rows = await this.prisma.platform.findMany({
       orderBy: [{ firstBatch: 'desc' }, { sort: 'asc' }, { name: 'asc' }],
       include: { rosterRequests: { where: { status: 'PENDING' }, orderBy: { createdAt: 'desc' }, take: 1 } },
     });
+    return Promise.all(rows.map(async (row) => ({ ...row, logoUrl: await this.logoUrl(row.logoKey) })));
   }
 
   async createPlatform(user: AuthUser, input: z.infer<typeof platformCreateSchema>) {
     assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
-    return this.prisma.$transaction(async (tx) =>
+    const created = await this.prisma.$transaction(async (tx) =>
       tx.platform.create({
         data: { code: await nextCode(tx, 'PF', 3), name: input.name, region: input.region ?? '', syncLag: input.syncLag, contact: input.contact ?? '', proposed: true, firstBatch: false, enabled: true },
       }),
     );
+    await this.audit.write(user.id, 'platform.create', 'Platform', created.id, { name: created.name });
+    return created;
+  }
+
+  async uploadLogo(user: AuthUser, id: string, file?: { buffer: Buffer; mimetype?: string; originalname?: string }) {
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
+    assertFound(await this.prisma.platform.findUnique({ where: { id } }), '平台不存在');
+    if (!file?.buffer?.length) throw new BadRequestException('请上传标志图片');
+    const type = file.mimetype || '';
+    const ext = type === 'image/png' ? 'png' : type === 'image/webp' ? 'webp' : type === 'image/gif' ? 'gif' : type === 'image/jpeg' ? 'jpg' : '';
+    if (!ext) throw new BadRequestException('标志请用 png、jpg 或 webp');
+    const key = `platforms/${id}/logo-${Date.now()}.${ext}`;
+    await this.storage.putObject(key, file.buffer, type);
+    const updated = await this.prisma.platform.update({ where: { id }, data: { logoKey: key } });
+    await this.audit.write(user.id, 'platform.logo', 'Platform', id, { logoKey: key, filename: file.originalname || '' });
+    return { ...updated, logoUrl: await this.logoUrl(key) };
+  }
+
+  private async logoUrl(key: string | null) {
+    if (!key) return null;
+    try {
+      return await this.storage.presignGet(key);
+    } catch {
+      return null;
+    }
   }
 
   async patchPlatform(user: AuthUser, id: string, input: z.infer<typeof platformPatchSchema>) {
@@ -150,6 +178,7 @@ export class AdminService {
         entityId: request.id,
       });
       const updated = Object.keys(data).length ? await this.prisma.platform.update({ where: { id }, data }) : platform;
+      if (Object.keys(data).length) await this.audit.write(user.id, 'platform.update', 'Platform', id, input as never);
       return { ...updated, pendingConfirmation: true, request };
     }
     if (firstBatchTouch || enabledChange) {

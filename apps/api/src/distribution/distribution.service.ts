@@ -3,6 +3,8 @@ import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import {
   BLOCKING_PLAN_STATUSES,
+  LISTING_LABEL,
+  LISTING_NEXT,
   PLAN_STATUS_LABEL,
   addBusinessDays,
   clientPhaseFromPlans,
@@ -19,6 +21,7 @@ import { moneyDecimal } from '../core/money';
 import { jobScheduleFromEnv } from '../jobs/jobs.service';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
+import { SettingsService } from '../core/settings.service';
 import { recordFinishedTask } from '../core/task-log';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -38,6 +41,7 @@ export class DistributionService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly settings: SettingsService,
   ) {}
 
   async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }) {
@@ -68,7 +72,7 @@ export class DistributionService {
       });
       if (blocking) problems.push(`已有进行中的${input.round === 'FIRST' ? '首发' : '二轮'}申请`);
 
-      const targets = await this.resolvePlatforms(tx, input);
+      const targets = await this.resolvePlatforms(tx, input, user.id);
       if (problems.length) {
         return { id: '', status: 'PRECHECK_FAILED' as const, precheckNote: problems.join('；'), drama: { id: drama.id, title: drama.title, code: drama.code } };
       }
@@ -95,6 +99,7 @@ export class DistributionService {
           });
         }
       }
+      const limits = await this.slaLimits();
       const plan = await tx.distributionPlan.create({
         data: {
           code: await nextCode(tx, 'PL'),
@@ -103,7 +108,7 @@ export class DistributionService {
           round: input.round,
           status,
           assigneeId,
-          slaDueAt: assigneeId ? addBusinessDays(new Date(), status === 'SHARE_CONFIG' ? 1 : 2) : null,
+          slaDueAt: assigneeId ? addBusinessDays(new Date(), status === 'SHARE_CONFIG' ? limits.share : limits.review) : null,
           platforms: {
             create: targets.map((platform) => ({
               platformId: platform.id,
@@ -223,9 +228,10 @@ export class DistributionService {
     const assignee = assertFound(await this.prisma.user.findUnique({ where: { id: assigneeId } }), '运营不存在');
     if (assignee.role !== 'OPS' || assignee.disabled) throw new BadRequestException('只能分派给在岗运营专员');
     const status = plan.status === 'PENDING_ASSIGN' ? 'PENDING_REVIEW' : plan.status;
+    const limits = await this.slaLimits();
     await this.prisma.distributionPlan.update({
       where: { id: planId },
-      data: { assigneeId, status, slaDueAt: plan.slaDueAt ?? addBusinessDays(new Date(), 2) },
+      data: { assigneeId, status, slaDueAt: plan.slaDueAt ?? addBusinessDays(new Date(), limits.review) },
     });
     await this.audit.write(user.id, 'review.assign', 'DistributionPlan', planId, { assigneeId });
     return this.getPlan(user, planId);
@@ -240,7 +246,7 @@ export class DistributionService {
     return updated;
   }
 
-  async spotCheck(user: AuthUser, input: { ratio: number; results?: { planId: string; result: 'PASS' | 'FAIL' | 'NOTE'; note?: string }[] }) {
+  async spotCheck(user: AuthUser, input: { ratio?: number; results?: { planId: string; result: 'PASS' | 'FAIL' | 'NOTE'; note?: string }[] }) {
     assertBusinessWrite(user);
     assertRole(user, ['OPS_MANAGER'], '抽检由运营主管处理');
     if (input.results?.length) {
@@ -262,10 +268,11 @@ export class DistributionService {
     });
     const checked = new Set((await this.prisma.reviewSpotCheck.findMany({ where: { planId: { in: pool.map((row) => row.id) } }, select: { planId: true } })).map((row) => row.planId));
     const candidates = pool.filter((row) => !checked.has(row.id));
-    const count = candidates.length ? Math.max(1, Math.min(candidates.length, Math.ceil(candidates.length * input.ratio))) : 0;
+    const ratio = input.ratio ?? (await this.slaLimits()).spot;
+    const count = candidates.length ? Math.max(1, Math.min(candidates.length, Math.ceil(candidates.length * ratio))) : 0;
     const items = candidates.slice(0, count);
-    await this.audit.write(user.id, 'review.spot_check', 'DistributionPlan', items.map((row) => row.id).join(','), { ratio: input.ratio, sampled: items.length });
-    return { ok: true, poolSize: pool.length, sampledCount: items.length, ratio: input.ratio, items };
+    await this.audit.write(user.id, 'review.spot_check', 'DistributionPlan', items.map((row) => row.id).join(','), { ratio, sampled: items.length });
+    return { ok: true, poolSize: pool.length, sampledCount: items.length, ratio, items };
   }
 
   async expand(user: AuthUser, planId: string) {
@@ -379,7 +386,8 @@ export class DistributionService {
       await this.prisma.distributionPlan.update({ where: { id: planId }, data: { status: 'NEEDS_REVISION', rejectSummary: summary } });
       await this.openTicket(plan, '审核还需要修改', summary, user.id);
     } else {
-      await this.prisma.distributionPlan.update({ where: { id: planId }, data: { status: 'SHARE_CONFIG', slaDueAt: addBusinessDays(new Date(), 1) } });
+      const limits = await this.slaLimits();
+      await this.prisma.distributionPlan.update({ where: { id: planId }, data: { status: 'SHARE_CONFIG', slaDueAt: addBusinessDays(new Date(), limits.share) } });
     }
     await this.audit.write(user.id, rejected.length ? 'review.reject' : 'review.pass', 'DistributionPlan', planId);
     return this.getPlan(user, planId);
@@ -392,9 +400,10 @@ export class DistributionService {
     const rejected = await this.prisma.episode.count({ where: { dramaId: plan.dramaId, reviewStatus: 'REJECTED' } });
     if (rejected) throw new BadRequestException('请先替换被驳回的集，再重新提交');
     await this.prisma.episode.updateMany({ where: { dramaId: plan.dramaId, reviewStatus: 'REPLACED' }, data: { reviewStatus: 'PENDING' } });
+    const limits = await this.slaLimits();
     await this.prisma.distributionPlan.update({
       where: { id: planId },
-      data: { status: 'IN_REVIEW', resubmitCount: { increment: 1 }, slaDueAt: addBusinessDays(new Date(), 1), rejectSummary: null },
+      data: { status: 'IN_REVIEW', resubmitCount: { increment: 1 }, slaDueAt: addBusinessDays(new Date(), limits.share), rejectSummary: null },
     });
     await this.audit.write(user.id, 'plan.resubmit', 'DistributionPlan', planId);
     return this.getPlan(user, planId);
@@ -486,6 +495,7 @@ export class DistributionService {
     if (!['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(listing.plan.status)) {
       throw new BadRequestException('审核通过后才能录入上架结果');
     }
+    this.assertListingTransition(listing.listingStatus, input.status);
     await this.prisma.planPlatform.update({
       where: { id: listingId },
       data: {
@@ -503,8 +513,44 @@ export class DistributionService {
     else if (allClosed) status = 'OFFLINE';
     else if (status === 'APPROVED') status = 'DISTRIBUTING';
     if (status !== listing.plan.status) await this.prisma.distributionPlan.update({ where: { id: listing.planId }, data: { status } });
-    await this.audit.write(user.id, 'listing.update', 'PlanPlatform', listingId, { status: input.status });
+    await this.audit.write(user.id, 'listing.update', 'PlanPlatform', listingId, { status: input.status, from: listing.listingStatus });
     return this.getPlan(user, listing.planId);
+  }
+
+  async batchListings(user: AuthUser, input: { planIds: string[]; platformIds: string[]; status: string }) {
+    assertBusinessWrite(user);
+    assertRole(user, ['BD', 'OPS', 'OPS_MANAGER']);
+    const updated: { planId: string; platformId: string }[] = [];
+    const reasons: { planId: string; platformId: string; reason: string }[] = [];
+    for (const planId of input.planIds) {
+      const plan = await this.prisma.distributionPlan.findUnique({ where: { id: planId }, include: { platforms: true, company: true } });
+      if (!plan) {
+        for (const platformId of input.platformIds) reasons.push({ planId, platformId, reason: '工单不存在' });
+        continue;
+      }
+      if (user.role === 'OPS' || user.role === 'BD') {
+        try {
+          assertCompanyAccess(user, plan.company);
+        } catch {
+          for (const platformId of input.platformIds) reasons.push({ planId, platformId, reason: '不在负责范围' });
+          continue;
+        }
+      }
+      for (const platformId of input.platformIds) {
+        const listing = plan.platforms.find((item) => item.platformId === platformId);
+        if (!listing) {
+          reasons.push({ planId, platformId, reason: '这部剧没有这个平台' });
+          continue;
+        }
+        try {
+          await this.patchListing(user, listing.id, { status: input.status });
+          updated.push({ planId, platformId });
+        } catch (error) {
+          reasons.push({ planId, platformId, reason: error instanceof Error ? error.message : '没有改成' });
+        }
+      }
+    }
+    return { updated: updated.length, skipped: reasons.length, items: updated, reasons };
   }
 
   async batchPass(user: AuthUser, planIds: string[]) {
@@ -539,7 +585,8 @@ export class DistributionService {
         skipped.push({ id: plan.id, code: plan.code, reason: '有问题集，已跳过' });
         continue;
       }
-      await this.prisma.distributionPlan.update({ where: { id: plan.id }, data: { status: 'SHARE_CONFIG', slaDueAt: addBusinessDays(new Date(), 1) } });
+      const limits = await this.slaLimits();
+      await this.prisma.distributionPlan.update({ where: { id: plan.id }, data: { status: 'SHARE_CONFIG', slaDueAt: addBusinessDays(new Date(), limits.share) } });
       await this.audit.write(user.id, 'review.batch_pass', 'DistributionPlan', plan.id);
       passed.push({ id: plan.id, code: plan.code });
     }
@@ -747,7 +794,34 @@ export class DistributionService {
     return { planId, code: plan.code, title: plan.drama.title, kind: plan.shares.length ? 'OVERWRITE' as const : 'NEW' as const, reason: '' };
   }
 
-  private async resolvePlatforms(tx: Prisma.TransactionClient, input: { round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[] }) {
+  private assertListingTransition(from: string, to: string) {
+    if (from === to) return;
+    const allowed = LISTING_NEXT[from] ?? [];
+    if (allowed.includes(to)) return;
+    const fromLabel = LISTING_LABEL[from] || from;
+    const toLabel = LISTING_LABEL[to] || to;
+    const via = allowed.map((item) => LISTING_LABEL[item] || item).join('、') || '中间状态';
+    throw new BadRequestException(`不能从${fromLabel}直接改为${toLabel}，请先改为${via}`);
+  }
+
+  private async slaLimits() {
+    const saved = await this.settings.all();
+    const review = Number(saved.reviewSlaDays);
+    const share = Number(saved.shareSlaDays);
+    const spot = Number(saved.spotCheckRatio);
+    const warn = Number(saved.slaWarnRatio);
+    const dbl = Number(saved.slaDoubleRatio);
+    const env = jobScheduleFromEnv();
+    return {
+      review: Number.isInteger(review) && review > 0 ? review : 2,
+      share: Number.isInteger(share) && share > 0 ? share : 1,
+      spot: Number.isFinite(spot) && spot > 0 && spot <= 1 ? spot : 0.1,
+      warn: Number.isFinite(warn) && warn > 0 ? warn : env.slaWarnRatio,
+      double: Number.isFinite(dbl) && dbl > 0 ? dbl : env.slaDoubleRatio,
+    };
+  }
+
+  private async resolvePlatforms(tx: Prisma.TransactionClient, input: { round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[] }, actorId: string | null) {
     if (input.round === 'FIRST') {
       const required = await tx.platform.findMany({ where: { firstBatch: true, enabled: true }, orderBy: { sort: 'asc' } });
       if (!required.length) throw new BadRequestException('首发平台名单还没有配置');
@@ -771,11 +845,11 @@ export class DistributionService {
         created.push(hit);
         continue;
       }
-      created.push(
-        await tx.platform.create({
-          data: { code: await nextCode(tx, 'PF', 3), name, proposed: true, enabled: true, firstBatch: false, syncMode: 'MANUAL', syncLag: 'T1' },
-        }),
-      );
+      const row = await tx.platform.create({
+        data: { code: await nextCode(tx, 'PF', 3), name, proposed: true, enabled: true, firstBatch: false, syncMode: 'MANUAL', syncLag: 'T1' },
+      });
+      created.push(row);
+      await this.audit.write(actorId, 'platform.create', 'Platform', row.id, { name, proposed: true });
     }
     const map = new Map([...found, ...created].map((item) => [item.id, item]));
     return [...map.values()];
@@ -810,7 +884,7 @@ export class DistributionService {
 
   async slaBoard(user: AuthUser) {
     assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN']);
-    const limits = jobScheduleFromEnv();
+    const limits = await this.slaLimits();
     const where: Prisma.DistributionPlanWhereInput = {
       status: { in: ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] },
       slaDueAt: { not: null },
@@ -826,7 +900,7 @@ export class DistributionService {
     });
     const now = Date.now();
     const items = plans.map((plan) => {
-      const tier = slaTier(plan.submittedAt, plan.slaDueAt, now, limits.slaWarnRatio, limits.slaDoubleRatio);
+      const tier = slaTier(plan.submittedAt, plan.slaDueAt, now, limits.warn, limits.double);
       return {
         id: plan.id,
         code: plan.code,
@@ -859,8 +933,8 @@ export class DistributionService {
         overdue: items.filter((item) => item.tier === 'overdue').length,
         double: items.filter((item) => item.tier === 'double').length,
       },
-      warnRatio: limits.slaWarnRatio,
-      doubleRatio: limits.slaDoubleRatio,
+      warnRatio: limits.warn,
+      doubleRatio: limits.double,
       byAssignee: [...byAssignee.values()],
       items,
     };

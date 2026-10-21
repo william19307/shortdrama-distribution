@@ -202,6 +202,12 @@ export const listingPatchSchema = z.object({
   listedAt: dateStr.optional(),
 });
 
+export const listingBatchSchema = z.object({
+  planIds: z.array(z.string().min(1)).min(1).max(200),
+  platformIds: z.array(z.string().min(1)).min(1).max(50),
+  status: z.enum(LISTING_STATUSES),
+});
+
 export const dailyStatSchema = z.object({
   statDate: dateStr,
   statTimezone: z.string().trim().min(1).max(60),
@@ -302,7 +308,7 @@ export const reviewReassignSchema = z.object({
 });
 
 export const spotCheckSchema = z.object({
-  ratio: z.number().gt(0).lte(1).default(0.1),
+  ratio: z.number().gt(0).lte(1).optional(),
   results: z
     .array(z.object({
       planId: z.string().min(1),
@@ -410,10 +416,25 @@ export const userPatchSchema = z.object({
   disabled: z.boolean().optional(),
 });
 
+const ratioText = z
+  .string()
+  .regex(/^(?:0\.\d{1,4}|1(?:\.0{1,4})?)$/, '比例要大于 0 且不超过 1')
+  .refine((value) => {
+    const n = Number(value);
+    return n > 0 && n <= 1;
+  }, '比例要大于 0 且不超过 1');
+
+const slaDaysText = z.string().regex(/^(?:[1-9]|[12]\d|30)$/, '时限为 1 到 30 个工作日');
+
 export const settingsSchema = z.object({
   minWithdrawAmount: decimalStr,
   deviationPct: z.string().regex(/^\d+(\.\d{1,2})?$/),
   syncDeadline: z.string().regex(/^\d{2}:\d{2}$/),
+  spotCheckRatio: ratioText,
+  reviewSlaDays: slaDaysText,
+  shareSlaDays: slaDaysText,
+  slaWarnRatio: ratioText,
+  slaDoubleRatio: z.string().regex(/^(?:[1-9]\d?(?:\.\d{1,2})?)$/, '严重超时倍数要大于 1'),
 });
 
 export const ticketMessageSchema = z.object({

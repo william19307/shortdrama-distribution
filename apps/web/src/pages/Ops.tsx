@@ -3,7 +3,7 @@ import { App, Button, Card, Drawer, Form, Input, InputNumber, Modal, Select, Spa
 import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, SHARE_MODE_LABEL } from '@shortform/shared';
+import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, LISTING_NEXT, SHARE_MODE_LABEL } from '@shortform/shared';
 import { api, download, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNote, PageHead, PlatformChip, StatusTag, dayText, labelOf } from '../ui';
@@ -186,7 +186,9 @@ export function ReviewsPage() {
         <Button type="primary" disabled={viewOnly} onClick={async () => {
           try {
             const res = await api<{ passed: { code: string }[]; skipped: { code: string; reason: string }[] }>('/reviews/batch-pass', { method: 'POST', json: { planIds: picked } });
-            setBatchNote(`通过 ${res.passed.length} 部。${res.skipped.map((item) => `${item.code || '工单'}：${item.reason}`).join('；')} 已记入任务中心。`);
+            const note = `通过 ${res.passed.length} 部。${res.skipped.map((item) => `${item.code || '工单'}：${item.reason}`).join('；')} 已记入任务中心。`;
+            setBatchNote(note);
+            message.success(`已通过 ${res.passed.length} 部${res.skipped.length ? `，跳过 ${res.skipped.length} 部` : ''}`);
             setPicked([]);
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); }
@@ -204,12 +206,19 @@ export function ReviewsPage() {
           try {
             const res = await api<{ rejectedCount: number; skippedCount: number; skipped: { reason: string }[] }>('/reviews/batch-reject', { method: 'POST', json: { items: picked.map((planId) => ({ planId })), reasonCode, note: rejectNote || undefined } });
             setBatchNote(`驳回 ${res.rejectedCount} 部，跳过 ${res.skippedCount} 部。${res.skipped.map((item) => item.reason).join('；')} 已记入任务中心。`);
+            message.success(`已驳回 ${res.rejectedCount} 部${res.skippedCount ? `，跳过 ${res.skippedCount} 部` : ''}`);
             setPicked([]);
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有驳回'); }
         }}>批量驳回</Button>
         {batchNote ? <span>{batchNote}</span> : null}
       </Space> : null}
+      {lead ? <div style={{ marginBottom: 12 }}><Button disabled={viewOnly} onClick={async () => {
+        try {
+          const res = await api<{ sampledCount: number; ratio: number }>('/reviews/spot-check', { method: 'POST', json: {} });
+          message.success(`已按 ${Math.round(res.ratio * 100)}% 抽出 ${res.sampledCount} 部`);
+        } catch (err) { message.error(err instanceof Error ? err.message : '没有抽出'); }
+      }}>按全局比例抽检</Button></div> : null}
       {sla ? <Space wrap style={{ marginBottom: 12 }}>
         <Tag>在审 {sla.summary.total}</Tag>
         <Tag color="gold">80%预警 {sla.summary.warn80}</Tag>
@@ -299,8 +308,12 @@ export function SharesPage() {
   const [error, setError] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
   const [templates, setTemplates] = useState<{ id: string; name: string; version: number }[]>([]);
+  const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([]);
+  const [batchPlatforms, setBatchPlatforms] = useState<string[]>([]);
+  const [batchStatus, setBatchStatus] = useState<string>();
   const [preview, setPreview] = useState<{ templateId: string; items: { planId: string; title: string; kind: string; reason: string }[] } | null>(null);
   useEffect(() => { api<{ id: string; name: string; version: number }[]>('/share-templates').then(setTemplates).catch(() => undefined); }, []);
+  useEffect(() => { api<{ id: string; name: string }[]>('/platforms').then(setPlatforms).catch(() => undefined); }, []);
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -333,6 +346,21 @@ export function SharesPage() {
           return false;
         }}><Button disabled={viewOnly}>导入上架结果</Button></Upload>
         <Button onClick={() => download('/listings/template', 'listing-template.xlsx')}>下载上架模板</Button>
+        {picked.length ? (
+          <>
+            <Select mode="multiple" style={{ minWidth: 220 }} placeholder="选择平台" value={batchPlatforms} options={platforms.map((item) => ({ value: item.id, label: item.name }))} onChange={setBatchPlatforms} />
+            <Select style={{ width: 140 }} placeholder="上架状态" value={batchStatus} options={Object.keys(LISTING_LABEL).map((value) => ({ value, label: labelOf(value) }))} onChange={setBatchStatus} />
+            <Button disabled={viewOnly || !batchPlatforms.length || !batchStatus} onClick={async () => {
+              try {
+                const res = await api<{ updated: number; skipped: number; reasons: { reason: string }[] }>('/listings/batch', { method: 'POST', json: { planIds: picked, platformIds: batchPlatforms, status: batchStatus } });
+                message.success(`已更新 ${res.updated} 条${res.skipped ? `，跳过 ${res.skipped} 条` : ''}`);
+                if (res.skipped) setError(res.reasons.map((item) => item.reason).filter((reason, index, list) => list.indexOf(reason) === index).join('；'));
+                setPicked([]);
+                load();
+              } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); }
+            }}>批量改状态</Button>
+          </>
+        ) : null}
         <Select style={{ width: 220 }} placeholder="分成模板" options={templates.map((item) => ({ value: item.id, label: `${item.name} v${item.version}` }))} onChange={async (templateId) => {
           if (!picked.length) { message.error('请先勾选剧'); return; }
           const res = await api<{ items: { planId: string; title: string; kind: string; reason: string }[] }>(`/share-templates/${templateId}/preview`, { method: 'POST', json: { planIds: picked } });
@@ -382,8 +410,8 @@ export function SharesPage() {
                 {row.mode !== 'NO_MG' ? <Input style={{ width: 140 }} placeholder="保底金额" value={row.guaranteeAmount} onChange={(event) => set('guaranteeAmount', event.target.value)} /> : null}
                 {row.mode !== 'NO_MG' ? <Input style={{ width: 80 }} value={row.guaranteeCurrency} onChange={(event) => set('guaranteeCurrency', event.target.value)} /> : null}
                 <Tag>{labelOf(item.listingStatus)}</Tag>
-                {['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(plan.status) ? (
-                  <Select disabled={viewOnly} style={{ width: 140 }} placeholder="上架结果" options={Object.keys(LISTING_LABEL).map((value) => ({ value, label: labelOf(value) }))} onChange={async (status) => { await api(`/listings/${item.id}`, { method: 'PATCH', json: { status } }); message.success('上架结果已更新'); const next = await api<Plan>(`/plans/${plan.id}`); setPlan(next); }} />
+                {['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(plan.status) && (LISTING_NEXT[item.listingStatus] || []).length ? (
+                  <Select disabled={viewOnly} style={{ width: 140 }} placeholder="下一步" options={(LISTING_NEXT[item.listingStatus] || []).map((value) => ({ value, label: labelOf(value) }))} onChange={async (status) => { try { await api(`/listings/${item.id}`, { method: 'PATCH', json: { status } }); message.success('上架结果已更新'); const next = await api<Plan>(`/plans/${plan.id}`); setPlan(next); load(); } catch (err) { message.error(err instanceof Error ? err.message : '不能这样改'); } }} />
                 ) : null}
               </Space>
             );
@@ -624,6 +652,19 @@ export function PlatformsPage() {
     <div>
       <PageHead title="平台名单" hint="初始首批是 ReelShort、DramaBox、ShortMax、FlexTV、GoodShort。增删首批要主管确认。数据日调整从次日起生效。" />
       <Table rowKey="id" dataSource={rows} pagination={false} columns={[
+        { title: '标志', dataIndex: 'logoUrl', width: 160, render: (url: string | null, row) => <Space>
+          {url ? <img src={url} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} /> : <span style={{ color: 'var(--ds-text-3)' }}>无</span>}
+          <Upload showUploadList={false} accept="image/png,image/jpeg,image/webp" beforeUpload={async (file) => {
+            try {
+              const body = new FormData();
+              body.append('file', file);
+              await api(`/platforms/${row.id}/logo`, { method: 'POST', body });
+              message.success('标志已上传');
+              load();
+            } catch (err) { message.error(err instanceof Error ? err.message : '没有上传'); }
+            return false;
+          }}><Button size="small">上传</Button></Upload>
+        </Space> },
         { title: '平台', dataIndex: 'name' },
         { title: '地区', dataIndex: 'region' },
         { title: '数据日', dataIndex: 'syncLag', render: (value, row) => <Space>{canEditLag ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); message.success('数据日次日生效'); load(); }} /> : labelOf(value)}{row.syncLagPending ? <Tag>{labelOf(row.syncLagPending)} 次日生效</Tag> : null}</Space> },
@@ -673,12 +714,17 @@ export function SettingsPage() {
   const admin = user?.role === 'ADMIN';
   return (
     <div>
-      <PageHead title="全局参数" hint="最低提款额、偏差提示和每天数据截止时间。" />
+      <PageHead title="全局参数" hint="最低提款额、偏差提示、数据截止，以及抽检比例和审核时限。只有管理员能改，财务看不到这一页。" />
       {values ? (
         <Form layout="vertical" style={{ maxWidth: 420 }} initialValues={values} onFinish={async (next) => { try { setValues(await api('/admin/settings', { method: 'PUT', json: next })); message.success('已保存'); } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); } }}>
           <Form.Item name="minWithdrawAmount" label="最低提款额（人民币）"><Input disabled={!admin} /></Form.Item>
           <Form.Item name="deviationPct" label="偏差提示阈值（%）"><Input disabled={!admin} /></Form.Item>
           <Form.Item name="syncDeadline" label="数据截止（上海时间）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="spotCheckRatio" label="抽检比例（0 到 1，如 0.1）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="reviewSlaDays" label="审核 SLA（工作日）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="shareSlaDays" label="分成配置时限（工作日）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="slaWarnRatio" label="审核预警比例（如 0.8）"><Input disabled={!admin} /></Form.Item>
+          <Form.Item name="slaDoubleRatio" label="严重超时倍数（如 2）"><Input disabled={!admin} /></Form.Item>
           {admin ? <Button type="primary" htmlType="submit">保存</Button> : null}
         </Form>
       ) : null}

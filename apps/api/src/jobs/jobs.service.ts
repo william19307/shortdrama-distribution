@@ -5,6 +5,7 @@ import { AuditService } from '../core/audit.service';
 import { assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { expectedStatDate, shanghaiToday } from '@shortform/shared';
 import { PrismaService } from '../core/prisma.service';
+import { SettingsService } from '../core/settings.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 export const JOB_NAMES = ['sync-tasks', 'daily-stats-warn', 'daily-stats-escalate', 'review-sla', 'settlement-generate'] as const;
@@ -62,6 +63,7 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly notifications: NotificationsService,
+    private readonly settings: SettingsService,
   ) {}
 
   onModuleInit() {
@@ -153,25 +155,22 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     const message = `[DS-09] ${yesterday} 仍有 ${pending} 条日报未完成`;
     const slot = this.halfHourSlot();
     const entityId = `${yesterday}:${slot}`;
+    if (!pending) return { job: 'daily-stats-warn', date: yesterday, pending, notified: 0, message };
     const already = await this.prisma.auditLog.findFirst({ where: { action: 'job.daily-stats-warn', entityId } });
     if (already) return { job: 'daily-stats-warn', date: yesterday, pending, notified: 0, message };
-    let notified = 0;
-    if (pending) {
-      const owners = [...new Set(pendingRows.map((row) => row.company.ownerId).filter((id): id is string => Boolean(id)))];
-      const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
-      const targets = [...new Set([...owners, ...managers.map((row) => row.id)])];
-      const pushed = await this.notifications.pushMany(targets, {
-        type: 'DS09_WARN',
-        title: message,
-        body: '请完成录入和复核。未完成会每 30 分钟再提醒一次。',
-        entityType: 'DailyStat',
-        entityId,
-      });
-      notified = pushed.count;
-      this.log.warn(message);
-    }
-    await this.audit.write(null, 'job.daily-stats-warn', 'Job', entityId, { message, pending, notified });
-    return { job: 'daily-stats-warn', date: yesterday, pending, notified, message };
+    const owners = [...new Set(pendingRows.map((row) => row.company.ownerId).filter((id): id is string => Boolean(id)))];
+    const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
+    const targets = [...new Set([...owners, ...managers.map((row) => row.id)])];
+    const pushed = await this.notifications.pushMany(targets, {
+      type: 'DS09_WARN',
+      title: message,
+      body: '请完成录入和复核。未完成会每 30 分钟再提醒一次。',
+      entityType: 'DailyStat',
+      entityId,
+    });
+    this.log.warn(message);
+    await this.audit.write(null, 'job.daily-stats-warn', 'Job', entityId, { message, pending, notified: pushed.count });
+    return { job: 'daily-stats-warn', date: yesterday, pending, notified: pushed.count, message };
   }
 
   async dailyStatsEscalate() {
@@ -209,13 +208,14 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
       where: { status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] }, slaDueAt: { not: null } },
       select: { id: true, code: true, slaDueAt: true, submittedAt: true, assigneeId: true },
     });
+    const ratios = await this.alertRatios();
     const buckets = { warn80: [] as string[], overdue: [] as string[], double: [] as string[] };
     const due: { id: string; code: string; assigneeId: string | null; tier: 'warn80' | 'overdue' | 'double'; slaDueAt: Date }[] = [];
     for (const plan of open) {
       if (!plan.slaDueAt || !plan.submittedAt) continue;
       const span = Math.max(plan.slaDueAt.getTime() - plan.submittedAt.getTime(), 1);
       const used = (now - plan.submittedAt.getTime()) / span;
-      const tier = used >= this.schedule.slaDoubleRatio ? 'double' : now >= plan.slaDueAt.getTime() ? 'overdue' : used >= this.schedule.slaWarnRatio ? 'warn80' : null;
+      const tier = used >= ratios.slaDoubleRatio ? 'double' : now >= plan.slaDueAt.getTime() ? 'overdue' : used >= ratios.slaWarnRatio ? 'warn80' : null;
       if (!tier) continue;
       buckets[tier].push(plan.code);
       due.push({ id: plan.id, code: plan.code, assigneeId: plan.assigneeId, tier, slaDueAt: plan.slaDueAt });
@@ -328,6 +328,16 @@ export class JobsService implements OnModuleInit, OnModuleDestroy {
     });
     await this.audit.write(null, 'job.settlement-generate', 'Job', today, { message, created, skipped });
     return { job: 'settlement-generate', created, skipped, message };
+  }
+
+  private async alertRatios() {
+    const saved = await this.settings.all();
+    const warn = Number(saved.slaWarnRatio);
+    const dbl = Number(saved.slaDoubleRatio);
+    return {
+      slaWarnRatio: Number.isFinite(warn) && warn > 0 ? warn : this.schedule.slaWarnRatio,
+      slaDoubleRatio: Number.isFinite(dbl) && dbl > 0 ? dbl : this.schedule.slaDoubleRatio,
+    };
   }
 
   private halfHourSlot() {

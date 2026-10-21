@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { pageSchema, platformCreateSchema, platformPatchSchema, settingsSchema, taskCreateSchema, userCreateSchema, userPatchSchema } from '@shortform/shared';
 import { Response } from 'express';
 import { z } from 'zod';
@@ -54,6 +55,16 @@ export class AdminController {
   @Post('platforms')
   createPlatform(@CurrentUser() user: AuthUser, @Body(new ZodPipe(platformCreateSchema)) body: z.infer<typeof platformCreateSchema>) {
     return this.admin.createPlatform(user, body);
+  }
+
+  @Post('platforms/:id/logo')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }))
+  uploadLogo(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile() file?: { buffer: Buffer; mimetype?: string; originalname?: string },
+  ) {
+    return this.admin.uploadLogo(user, id, file);
   }
 
   @Patch('platforms/:id')

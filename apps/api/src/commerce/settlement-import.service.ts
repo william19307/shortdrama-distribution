@@ -8,7 +8,7 @@ import { MONEY_PATTERN, moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
 import { recordFinishedTask } from '../core/task-log';
 
-const STAFF = ['OPS', 'OPS_MANAGER'] as const;
+const STAFF = ['OPS', 'OPS_MANAGER', 'FINANCE'] as const;
 
 @Injectable()
 export class SettlementImportService {

@@ -289,6 +289,7 @@ model Platform {
   syncLagEffectiveOn DateTime? @db.Date
   contact    String   @default("")
   color      String   @default("#86868B")
+  logoKey    String?
   proposed   Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt

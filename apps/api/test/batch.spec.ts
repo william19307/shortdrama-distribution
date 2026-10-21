@@ -170,25 +170,50 @@ describe('批量审核、分成、申请、上架和全选', () => {
     expect(failed).toBe(0);
   }, 120000);
 
-  it('RP-09 上架结果按行导入，错误行不影响已上架', async () => {
+  it('RP-09 上架结果按行导入，错误行不影响已上架，待对接不能直接已上架', async () => {
     const drama = await prisma.drama.create({ data: { code: `BLIST${stamp}`, companyId, title: '待上架', nameNorm: `list${stamp}`, language: '英语' } });
     const plan = await prisma.distributionPlan.create({ data: { code: `BPL${stamp}`, dramaId: drama.id, companyId, round: 'FIRST', status: 'APPROVED', assigneeId: opsId } });
-    await prisma.planPlatform.create({ data: { planId: plan.id, platformId, platformName, listingStatus: 'PENDING_CONTACT' } });
+    await prisma.planPlatform.create({ data: { planId: plan.id, platformId, platformName, listingStatus: 'PENDING_LISTING' } });
+    const stuckDrama = await prisma.drama.create({ data: { code: `BSTK${stamp}`, companyId, title: '还在对接', nameNorm: `stuck${stamp}`, language: '英语' } });
+    const stuck = await prisma.distributionPlan.create({ data: { code: `BST${stamp}`, dramaId: stuckDrama.id, companyId, round: 'FIRST', status: 'APPROVED', assigneeId: opsId } });
+    const stuckListing = await prisma.planPlatform.create({ data: { planId: stuck.id, platformId, platformName, listingStatus: 'PENDING_CONTACT' } });
     const book = new ExcelJS.Workbook();
     const sheet = book.addWorksheet('上架结果');
     sheet.addRow(['剧ID', '平台', '平台剧ID', '上架时间', '链接']);
     sheet.addRow([drama.code, platformName, 'PID-1', '2026-10-21', 'https://example.com/live']);
+    sheet.addRow([stuckDrama.code, platformName, 'PID-3', '2026-10-21', 'https://example.com/early']);
     sheet.addRow([drama.code, '没有这个平台', 'PID-2', '2026-10-21', 'https://example.com/bad']);
     const file = Buffer.from(await book.xlsx.writeBuffer());
     const imported = await authed(bdToken).post('/api/listings/import').attach('file', file, 'listings.xlsx');
     expect(imported.status).toBeLessThan(300);
     expect(imported.body.applied).toBe(1);
-    expect(imported.body.failed).toBe(1);
-    expect(imported.body.rows.find((row: { ok: boolean }) => !row.ok).error).toContain('平台不存在');
+    expect(imported.body.failed).toBe(2);
+    expect(imported.body.rows.some((row: { error: string }) => row.error.includes('平台不存在'))).toBe(true);
+    expect(imported.body.rows.find((row: { dramaCode: string; ok: boolean }) => row.dramaCode === stuckDrama.code && !row.ok).error).toContain('待对接');
     const seen = await authed(clientToken).get(`/api/plans/${plan.id}`);
     expect(seen.body.status).toBe('LIVE');
     expect(seen.body.platforms[0].listingStatus).toBe('LISTED');
     expect(seen.body.platforms[0].platformName).toBe(platformName);
+    const jump = await authed(bdToken).patch(`/api/listings/${stuckListing.id}`).send({ status: 'LISTED' });
+    expect(jump.status).toBe(400);
+    expect(jump.body.message).toContain('待对接');
+    const stepped = await authed(bdToken).post('/api/listings/batch').send({ planIds: [stuck.id], platformIds: [platformId], status: 'IN_CONTACT' });
+    expect(stepped.status).toBeLessThan(300);
+    expect(stepped.body.updated).toBe(1);
+    expect(stepped.body.skipped).toBe(0);
+    const moved = await prisma.planPlatform.findUnique({ where: { id: stuckListing.id } });
+    expect(moved?.listingStatus).toBe('IN_CONTACT');
+  });
+
+  it('平台可以上传标志，创建和上传都记审计', async () => {
+    const created = await authed(bdToken).post('/api/platforms').send({ name: `标志平台${stamp}`, syncLag: 'T1' });
+    expect(created.status).toBeLessThan(300);
+    expect(await prisma.auditLog.count({ where: { action: 'platform.create', entityId: created.body.id } })).toBe(1);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const logo = await authed(bdToken).post(`/api/platforms/${created.body.id}/logo`).attach('file', png, { filename: 'logo.png', contentType: 'image/png' });
+    expect(logo.status).toBeLessThan(300);
+    expect(logo.body.logoKey).toContain('logo');
+    expect(await prisma.auditLog.count({ where: { action: 'platform.logo', entityId: created.body.id } })).toBe(1);
   });
 
   it('VL-10 选中全部筛选结果并按选中行导出', async () => {

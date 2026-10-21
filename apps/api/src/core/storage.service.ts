@@ -211,10 +211,18 @@ export class StorageLifecycle implements OnModuleInit {
 
   async onModuleInit() {
     if (this.storage.driver() !== 's3') return;
-    try {
-      await (this.storage as S3StorageService).ensureBucket();
-    } catch (error) {
-      this.logger.warn(`对象存储暂不可用，上传会失败，其余接口仍可使用：${(error as Error).message}`);
+    const attempts = 15;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await (this.storage as S3StorageService).ensureBucket();
+        return;
+      } catch (error) {
+        if (attempt === attempts) {
+          this.logger.warn(`对象存储暂不可用，上传会失败，其余接口仍可使用：${(error as Error).message}`);
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
   }
 }

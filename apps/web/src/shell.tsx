@@ -98,7 +98,7 @@ export function Shell() {
   }, [user]);
   const selected = leafKeys(items).filter((key) => (key === '/' ? loc.pathname === '/' : loc.pathname === key || loc.pathname.startsWith(`${key}/`))).sort((a, b) => b.length - a.length)[0];
   useEffect(() => {
-    if (user?.role !== 'CLIENT') return;
+    if (!user) return;
     let stop = false;
     api<{ unread: number }>('/notifications?page=1&pageSize=1&unreadOnly=true')
       .then((res) => { if (!stop) setUnread(res.unread || 0); })
@@ -138,12 +138,12 @@ export function Shell() {
             <>
               <Button type="text" icon={<CloudUploadOutlined />} onClick={() => setQueueOpen(true)}>上传队列</Button>
               <Button type="text" icon={<UnorderedListOutlined />} onClick={() => nav('/tasks')}>任务中心</Button>
-              <Badge dot={unread > 0} offset={[-4, 6]}>
-                <Button type="text" icon={<BellOutlined />} onClick={() => nav('/tickets')}>消息</Button>
-              </Badge>
-              <Button type="text" icon={<UserOutlined />} onClick={() => nav('/company')}>账户中心</Button>
             </>
           ) : null}
+          <Badge count={unread} size="small" offset={[-2, 4]}>
+            <Button type="text" icon={<BellOutlined />} onClick={() => nav('/notifications')}>消息</Button>
+          </Badge>
+          {user?.role === 'CLIENT' ? <Button type="text" icon={<UserOutlined />} onClick={() => nav('/company')}>账户中心</Button> : null}
           <Segmented
             size="small"
             value={mode}

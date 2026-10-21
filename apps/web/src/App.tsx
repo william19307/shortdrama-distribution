@@ -15,6 +15,13 @@ import { CompanyPage } from './pages/Company';
 import { ContractsPage } from './pages/Contracts';
 import { SettlementsPage, WithdrawalsPage } from './pages/Money';
 import { WorkbenchPage, CompaniesPage, ReviewsPage, SharesPage, DailyPage, WatermarksPage, PlatformsPage, UsersPage, SettingsPage, AuditPage, TasksPage, RatesPage } from './pages/Ops';
+import { NotificationsPage } from './pages/Notifications';
+
+function AdminOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (user?.role !== 'ADMIN') return <Navigate to={user ? homeFor(user.role) : '/login'} replace />;
+  return children;
+}
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -43,6 +50,7 @@ export function AppRoutes() {
             <Route path="/" element={<DashboardPage />} />
             <Route path="/dramas" element={<LibraryPage />} />
             <Route path="/dramas/:id" element={<DramaPage />} />
+            <Route path="/notifications" element={<NotificationsPage />} />
             <Route path="/tickets" element={<TicketsPage />} />
             <Route path="/tickets/:id" element={<TicketsPage />} />
             <Route path="/company" element={<CompanyPage />} />
@@ -62,7 +70,7 @@ export function AppRoutes() {
             <Route path="/watermarks" element={<WatermarksPage />} />
             <Route path="/platforms" element={<PlatformsPage />} />
             <Route path="/users" element={<UsersPage />} />
-            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/settings" element={<AdminOnly><SettingsPage /></AdminOnly>} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/tasks" element={<TasksPage />} />
           </Route>

@@ -24,18 +24,18 @@ docker compose up -d --build
 | ops2@studio.example | 运营专员乙 · 王倩 | 另一名专员，默认没有负责客户 |
 | ops-manager@studio.example | 运营主管 · 孙悦 | 全部客户。分成复核、分派、扩大抽检、问题行上报 |
 | bd@studio.example | 商务 · 陈宇 | 只看负责的星河、青柠。上架结果。看不到结算单、提款单和保底 |
-| finance@studio.example | 财务 · 赵倩 | 认证、结算复核、提款、发票、打款、汇率。没有合同、视频库和分成菜单 |
+| finance@studio.example | 财务 · 赵倩 | 认证、结算复核、应结模板下载和导入、提款、发票、打款、汇率。没有合同、视频库、分成和全局参数 |
 | admin@studio.example | 管理员 · 周岚 | 能打开全部运营页面，业务按钮只读。可改员工角色、汇率、提款门槛、结算周期、同步日期。可手动触发定时任务 |
 
 ## 公测启动说明
 
 按下面顺序点一遍，就能走完客户 → 运营 → 财务。
 
-1. 用 `client@xinghe.example` 登录。左侧是「数据详情 / 视频存储库 / 合同申请及列表」。右上角有上传队列、任务中心、消息铃铛和账户中心。数据总览能看到播放和在架平台；昨天的数还没复核时会显示「数据更新中」。打开视频存储库里的《神医下山》，状态是需要修改。分集、封面、授权书可以上传，页面上有进度，失败后点「重试」。申请发行时首发五家平台不能删，二轮可以手填平台。
+1. 用 `client@xinghe.example` 登录。左侧是「数据详情 / 视频存储库 / 合同申请及列表」。右上角有上传队列、任务中心、消息铃铛和账户中心。铃铛打开「站内消息」。数据总览能看到播放和在架平台；昨天的数还没复核时会显示「数据更新中」。打开视频存储库里的《神医下山》，状态是需要修改。分集、封面、授权书可以上传，页面上有进度，失败后点「重试」。申请发行时首发五家平台不能删，二轮可以手填平台。
 2. 「结算与提款」里看人民币金额。未达最低提款额的单子不能单独申请。账户中心可以看认证和收款账户。工单里有审核意见和防伪截图。
 3. 退出，用 `ops@studio.example` 登录。工作台是林晓负责的客户。审核队列按抽检处理，驳回后客户替换再提交。分成里填写保底，这一栏客户和商务的接口都不会返回。每日数据手工录入，关联水印后再由别人复核。
 4. 结算单页填写周期，点「按这个周期批量生成」（这个周期要已有复核过的每日数据），或指定一个客户生成一张。录入应结金额的人不能自己复核。
-5. 用 `ops-manager@studio.example` 复核分成，用 `finance@studio.example` 复核应结金额。财务继续做提款核对、发票驳回或通过、上传回单打款。录入人不能复核自己的日报或结算金额。主管还可以分派审核、扩大抽检、把问题行标成异常。
+5. 用 `ops-manager@studio.example` 复核分成，用 `finance@studio.example` 复核应结金额。财务可以下载并导入应结模板，菜单里没有「全局参数」。财务继续做提款核对、发票驳回或通过、上传回单打款。录入人不能复核自己的日报或结算金额。主管还可以分派审核、扩大抽检、把问题行标成异常。运营、主管、财务和商务的右上角同样有消息铃铛。
 6. 用 `bd@studio.example` 登录。菜单里没有结算和提款。只能看到分派给自己的星河、青柠。打开发行计划时看不到保底金额。
 
 已知限制，公测演示接受、不要当成故障：
@@ -45,7 +45,7 @@ docker compose up -d --build
 - 结算金额是人手填写的人民币，系统不算结转。每天 01:00（`CRON_ST02`）按周期自动出单，页面上也可以批量生成。演示时管理员可 `POST /api/admin/jobs/settlement-generate/run`。
 - 上传失败可以重试已确认的分片，没有单独的断点续传队列。
 - 演示数据在容器卷里。`docker compose -f docker-compose.demo.yml --env-file .env.demo down -v` 会清掉数据。
-- 对象存储是容器内的 MinIO，浏览器经网页反代把文件交给 API，不把 9000 端口暴露出来。
+- 对象存储是容器内的 MinIO（`bitnamilegacy/minio`）。Docker Hub 上的 `minio/minio`、`minio/mc` 和 Quay 上的同名仓库目前拉不下来。API 启动时自己建桶 `shortform`，不再依赖 `mc`。浏览器经网页反代把文件交给 API。演示编排不把 9000 端口暴露出来。
 
 ## 本地开发
 
@@ -56,7 +56,7 @@ docker compose up -d --build
 需要 Node.js 20+、pnpm 10、Docker（Postgres 与 MinIO）。
 
 ```bash
-docker compose up -d postgres minio minio-init
+docker compose up -d postgres minio
 cp .env.example .env          # 已有 .env 时跳过；pnpm dev 也会自动复制
 pnpm install
 pnpm dev                      # 迁移、种子、API :3000、网页 :5173
@@ -65,13 +65,13 @@ pnpm dev                      # 迁移、种子、API :3000、网页 :5173
 只想分开启动时：
 
 ```bash
-docker compose up -d postgres minio minio-init
+docker compose up -d postgres minio
 pnpm db:setup                 # 同步 .env、编译 shared、prisma generate、migrate、seed
 pnpm dev:api                  # http://localhost:3000/api/health
 pnpm dev:web                  # http://localhost:5173
 ```
 
-没有 Docker 时，把 `.env` 里的 `DATABASE_URL` 指到本机 Postgres 16，并执行 `CREATE EXTENSION pg_trgm;`。对象存储可临时改成 `STORAGE_DRIVER=memory`（进程内存，重启即丢，只适合开发）。正式本地存储用 MinIO：控制台 http://localhost:9001 ，账号 `minio` / `minio123456`，桶名 `shortform`。
+没有 Docker 时，把 `.env` 里的 `DATABASE_URL` 指到本机 Postgres 16，并执行 `CREATE EXTENSION pg_trgm;`。对象存储可临时改成 `STORAGE_DRIVER=memory`（进程内存，重启即丢，只适合开发）。正式本地存储用 MinIO：镜像 `bitnamilegacy/minio`，控制台 http://localhost:9001 ，账号 `minio` / `minio123456`。API 连上后会创建桶 `shortform`。
 
 网页通过 Vite 把 `/api` 代理到 `VITE_API_PROXY`（默认 `http://localhost:3000`）。API 的 CORS 允许 `WEB_ORIGIN`。
 
@@ -141,7 +141,7 @@ apps/design-system
 
 存储走 `StorageService`：预签名直传、分片、读取和水印图都通过这个接口。换成 COS 只改环境变量。
 
-业务参数不写死在代码里：最低提款额（默认 10000 元）、金额偏差提示、每日数据截止时间，在管理端「全局参数」。平台「昨天 / 前天」在平台名单里配置。结算周期在客户或项目策略上配置。
+业务参数不写死在代码里：最低提款额（默认 10000 元）、金额偏差提示、每日数据截止时间、抽检比例（默认 0.1）、审核 SLA（默认 2 个工作日）、分成配置时限（默认 1 个工作日）、审核预警比例和严重超时倍数，在管理端「全局参数」。只有管理员能改。未保存时仍可用 `SPOT_CHECK_RATIO`、`REVIEW_SLA_DAYS`、`SHARE_SLA_DAYS`、`SLA_WARN_RATIO`、`SLA_DOUBLE_RATIO` 作缺省。平台「昨天 / 前天」在平台名单里配置。结算周期在客户或项目策略上配置。
 
 ## 已实现
 
@@ -155,9 +155,10 @@ apps/design-system
 - 截图加水印（暗纹 + 上海时间明文 + 原图短哈希），匹配成功后进入工单。
 - 数据看板、合同申请与列表。合同状态只能按申请中 → 起草中 → 待签署 → 客户或代传扫描件进入待确认 → 运营确认后生效 → 已到期。不能直接改成已生效。扫描件必须已在存储中，且属于该客户。商务只能改自己负责的客户。
 - 发行申请前，授权书或版权证明必须已审核通过。
-- 商务只看 `bdId` 指向自己的客户。财务菜单限于认证、结算、提款和汇率。
+- 商务只看 `bdId` 指向自己的客户。财务菜单限于认证、结算、提款和汇率，可以下载和导入应结模板，没有「全局参数」。
 - 结算单由运营手工填写人民币应结金额，也可按周期批量生成。每天 01:00（`CRON_ST02`，时区 `CRON_TZ`）自动生成上一周期结算单，站内通知财务和运营主管。录入人不能复核。不足最低提款额为「未达起提额」，合计达标后可合并申请。提款必须带幂等键，并发时只锁仍为「待申请」的结算单，后续核对、发票、打款在同一事务里推进。发票人工审核，驳回后可重传。打款上传回单。
-- 定时任务用 node-cron。DS-09 默认 05:00 预警、未完成每 30 分钟再提醒、06:00 超时升级。RV-12 按 `SLA_WARN_RATIO`（默认 0.8）和 `SLA_DOUBLE_RATIO`（默认 2）提醒审核人与主管。通知写站内消息。管理员或运营主管可 `POST /api/admin/jobs/:name/run`，name 为 `daily-stats-warn`、`daily-stats-escalate`、`review-sla`、`settlement-generate`。测试环境和 `JOBS_ENABLED=false` 不启动调度。
+- 定时任务用 node-cron。DS-09 默认 05:00 预警、未完成每 30 分钟再提醒、06:00 超时升级。这一档没有未完成日报时不占半小时去重槽。RV-12 按全局参数里的预警比例（默认 0.8）和严重超时倍数（默认 2）提醒审核人与主管。通知写站内消息，客户、运营、主管、财务、商务和管理员右上角都能打开 `/notifications`。管理员或运营主管可 `POST /api/admin/jobs/:name/run`，name 为 `sync-tasks`、`daily-stats-warn`、`daily-stats-escalate`、`review-sla`、`settlement-generate`。测试环境和 `JOBS_ENABLED=false` 不启动调度。
+- 上架状态只能按待对接 → 对接中 → 待上架 → 已上架推进，对接中也可以记成平台未接收，已上架之后才能下架。商务可以勾选多部剧和多个平台一次改状态。平台可以上传标志。
 
 ## 还没做
 

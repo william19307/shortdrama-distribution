@@ -47,6 +47,16 @@ export const LISTING_LABEL: Record<string, string> = {
   DELISTED: '已下架',
 };
 
+/** 上架只能走到下一步，不能从待对接直接到已上架。 */
+export const LISTING_NEXT: Record<string, string[]> = {
+  PENDING_CONTACT: ['IN_CONTACT'],
+  IN_CONTACT: ['PENDING_LISTING', 'REJECTED_BY_PLATFORM'],
+  REJECTED_BY_PLATFORM: ['IN_CONTACT'],
+  PENDING_LISTING: ['LISTED'],
+  LISTED: ['DELISTED'],
+  DELISTED: ['IN_CONTACT'],
+};
+
 export const SETTLEMENT_LABEL: Record<string, string> = {
   PENDING_ENTRY: '待录入',
   PENDING_REVIEW: '待复核',
