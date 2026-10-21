@@ -206,7 +206,7 @@ export const contractCreateSchema = z.object({
 
 export const contractPatchSchema = z.object({
   status: z.enum(CONTRACT_STATUSES).optional(),
-  fileKey: z.string().optional(),
+  fileKey: z.string().min(1).optional(),
   note: z.string().max(1000).optional(),
 });
 

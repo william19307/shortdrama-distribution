@@ -58,8 +58,15 @@ describe('合同状态机', () => {
     expect(draft.body.status).toBe('DRAFTING');
     const sign = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_SIGN' });
     expect(sign.status).toBeLessThan(300);
+    const confirmBare = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM' });
+    expect(confirmBare.status).toBe(400);
+    expect(confirmBare.body.message).toContain('扫描件');
+    const confirm = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM', fileKey: 'contracts/scan.pdf' });
+    expect(confirm.status).toBeLessThan(300);
+    expect(confirm.body.status).toBe('PENDING_CONFIRM');
     const live = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(live.status).toBeLessThan(300);
+    expect(live.body.status).toBe('EFFECTIVE');
     const expired = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EXPIRED' });
     expect(expired.status).toBeLessThan(300);
     const back = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });

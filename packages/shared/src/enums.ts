@@ -45,7 +45,7 @@ export type TicketType = (typeof TICKET_TYPES)[number];
 export const TICKET_STATUSES = ['CREATED', 'PENDING_CLIENT', 'READ', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'] as const;
 export type TicketStatus = (typeof TICKET_STATUSES)[number];
 
-export const CONTRACT_STATUSES = ['APPLYING', 'DRAFTING', 'PENDING_SIGN', 'EFFECTIVE', 'EXPIRED'] as const;
+export const CONTRACT_STATUSES = ['APPLYING', 'DRAFTING', 'PENDING_SIGN', 'PENDING_CONFIRM', 'EFFECTIVE', 'EXPIRED'] as const;
 export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
 
 export const SETTLEMENT_STATUSES = [

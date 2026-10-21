@@ -26,10 +26,12 @@ const OPEN_FOR_WITHDRAW: SettlementStatus[] = ['PENDING_APPLY', 'BELOW_MINIMUM']
 const CONTRACT_NEXT: Record<string, string[]> = {
   APPLYING: ['DRAFTING'],
   DRAFTING: ['PENDING_SIGN'],
-  PENDING_SIGN: ['EFFECTIVE', 'DRAFTING'],
+  PENDING_SIGN: ['PENDING_CONFIRM', 'DRAFTING'],
+  PENDING_CONFIRM: ['EFFECTIVE', 'PENDING_SIGN'],
   EFFECTIVE: ['EXPIRED'],
   EXPIRED: [],
 };
+const CONTRACT_CONFIRM_ROLES = ['OPS', 'ADMIN'];
 
 @Injectable()
 export class CommerceService {
@@ -82,19 +84,32 @@ export class CommerceService {
   }
 
   async patchContract(user: AuthUser, id: string, input: z.infer<typeof contractPatchSchema>) {
-    assertRole(user, ['OPS', 'BD', 'ADMIN', 'FINANCE']);
+    assertRole(user, ['OPS', 'BD', 'ADMIN']);
     const contract = assertFound(await this.prisma.contract.findUnique({ where: { id }, include: { company: true } }));
     if (user.role === 'OPS') assertCompanyAccess(user, contract.company);
-    if (input.status && input.status !== contract.status && !CONTRACT_NEXT[contract.status]?.includes(input.status)) {
+    let nextStatus = input.status ?? contract.status;
+    const nextFileKey = input.fileKey !== undefined ? input.fileKey : contract.fileKey;
+    if (input.fileKey && contract.status === 'PENDING_SIGN' && (!input.status || input.status === 'PENDING_SIGN' || input.status === 'PENDING_CONFIRM')) {
+      nextStatus = 'PENDING_CONFIRM';
+    }
+    if (nextStatus !== contract.status && !CONTRACT_NEXT[contract.status]?.includes(nextStatus)) {
       const from = CONTRACT_LABEL[contract.status] || contract.status;
-      const to = CONTRACT_LABEL[input.status] || input.status;
-      throw new BadRequestException(`合同不能从「${from}」直接改为「${to}」`);
+      const to = CONTRACT_LABEL[nextStatus] || nextStatus;
+      throw new BadRequestException(`合同不能从「${from}」直接改为「${to}」，请按 申请中→起草中→待签署→待确认→已生效 推进`);
+    }
+    if (nextStatus === 'PENDING_CONFIRM' && !nextFileKey) throw new BadRequestException('进入待确认前必须上传签署扫描件（fileKey）');
+    if (nextStatus === 'EFFECTIVE') {
+      if (contract.status !== 'PENDING_CONFIRM') throw new BadRequestException('合同须先进入「待确认」且上传扫描件后，才能确认生效');
+      if (!nextFileKey) throw new BadRequestException('确认生效前必须已上传签署扫描件');
+      if (!CONTRACT_CONFIRM_ROLES.includes(user.role)) throw new ForbiddenException('仅运营或管理员可确认合同生效');
+      if (user.role === 'OPS') assertCompanyAccess(user, contract.company);
     }
     const updated = await this.prisma.contract.updateMany({
       where: { id, status: contract.status },
-      data: { status: input.status, fileKey: input.fileKey, note: input.note },
+      data: { status: nextStatus, fileKey: input.fileKey, note: input.note },
     });
     if (updated.count !== 1) throw new ConflictException('合同状态已变化，请刷新');
+    await this.audit.write(user.id, 'contract.patch', 'Contract', id, { from: contract.status, to: nextStatus, fileKey: Boolean(nextFileKey) });
     return this.prisma.contract.findUnique({ where: { id }, include: { company: true, dramas: { include: { drama: true } } } });
   }
 

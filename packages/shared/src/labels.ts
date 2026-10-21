@@ -63,6 +63,7 @@ export const CONTRACT_LABEL: Record<string, string> = {
   APPLYING: '申请中',
   DRAFTING: '起草中',
   PENDING_SIGN: '待签署',
+  PENDING_CONFIRM: '待确认',
   EFFECTIVE: '已生效',
   EXPIRED: '已到期',
 };
