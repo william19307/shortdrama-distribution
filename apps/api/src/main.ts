@@ -30,7 +30,7 @@ export async function buildApp() {
     }
   });
   app.use((req: Request, res: Response, next: NextFunction) => {
-    if (req.method === 'PUT' && /\/api\/storage\/uploads\/[^/]+\/content$/.test(req.path)) {
+    if (req.method === 'PUT' && /\/api\/storage\/uploads\/[^/]+\/(content|parts\/\d+)$/.test(req.path)) {
       return raw({ type: () => true, limit: '2gb' })(req, res, next);
     }
     return json({ limit: '4mb' })(req, res, next);
@@ -44,7 +44,7 @@ export async function buildApp() {
 async function bootstrap() {
   const app = await buildApp();
   const port = Number(process.env.PORT || 3000);
-  await app.listen(port);
+  await app.listen(port, '0.0.0.0');
   // eslint-disable-next-line no-console
   console.log(`API http://localhost:${port}`);
 }

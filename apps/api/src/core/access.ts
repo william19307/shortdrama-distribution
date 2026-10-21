@@ -6,9 +6,9 @@ export function assertFound<T>(row: T | null | undefined, message = '内容不�
   return row;
 }
 
-/** 客户只能碰自己的企业；运营只能碰负责客户；管理员放行。 */
-export function assertCompanyAccess(user: AuthUser, company: { id: string; ownerId: string | null }) {
-  if (user.role === 'ADMIN') return;
+/** 客户看自己的企业；运营看 ownerId；商务看 bdId。主管和管理员不限客户。 */
+export function assertCompanyAccess(user: AuthUser, company: { id: string; ownerId: string | null; bdId?: string | null }) {
+  if (user.role === 'ADMIN' || user.role === 'OPS_MANAGER') return;
   if (user.role === 'CLIENT') {
     if (user.companyId !== company.id) throw new ForbiddenException('只能查看自己的企业');
     return;
@@ -16,6 +16,13 @@ export function assertCompanyAccess(user: AuthUser, company: { id: string; owner
   if (user.role === 'OPS') {
     if (company.ownerId !== user.id) throw new ForbiddenException('只能处理分配给你的客户');
     return;
+  }
+  if (user.role === 'BD') {
+    if (company.bdId !== user.id) throw new ForbiddenException('只能处理分配给你的客户');
+    return;
+  }
+  if (user.role === 'FINANCE') {
+    throw new ForbiddenException('财务不能操作该客户的这项内容');
   }
 }
 

@@ -18,6 +18,17 @@ export class AdminService {
 
   async workbench(user: AuthUser) {
     const companyScope = user.role === 'OPS' ? { company: { ownerId: user.id } } : user.role === 'CLIENT' ? { companyId: user.companyId! } : {};
+    if (user.role === 'BD') {
+      const scope = { company: { bdId: user.id } };
+      const [reviews, shareConfig, pendingShots, overdue] = await Promise.all([
+        this.prisma.distributionPlan.count({ where: { ...scope, status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'] } } }),
+        this.prisma.distributionPlan.count({ where: { ...scope, status: 'SHARE_CONFIG' } }),
+        this.prisma.watermarkShot.count({ where: { ...scope, status: 'PENDING_MATCH' } }),
+        this.prisma.distributionPlan.count({ where: { ...scope, slaDueAt: { lt: new Date() }, status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] } } }),
+      ]);
+      const settings = await this.settings.all();
+      return { reviews, shareConfig, shareReview: 0, entry: 0, toReview: 0, invoices: 0, paying: 0, pendingShots, overdue, settings: { deviationPct: settings.deviationPct, syncDeadline: settings.syncDeadline } };
+    }
     const [reviews, shareConfig, shareReview, entry, toReview, invoices, paying, pendingShots, overdue] = await Promise.all([
       this.prisma.distributionPlan.count({ where: { ...companyScope, status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'] } } }),
       this.prisma.distributionPlan.count({ where: { ...companyScope, status: 'SHARE_CONFIG' } }),
@@ -60,8 +71,17 @@ export class AdminService {
   }
 
   getSettings(user: AuthUser) {
-    assertRole(user, ['ADMIN', 'FINANCE', 'OPS']);
+    assertRole(user, ['ADMIN']);
     return this.settings.all();
+  }
+
+  assignees(user: AuthUser) {
+    assertRole(user, ['ADMIN', 'OPS_MANAGER']);
+    return this.prisma.user.findMany({
+      where: { role: { in: ['OPS', 'BD'] }, disabled: false },
+      select: { id: true, name: true, email: true, role: true },
+      orderBy: { name: 'asc' },
+    });
   }
 
   putSettings(user: AuthUser, input: z.infer<typeof settingsSchema>) {
@@ -74,7 +94,7 @@ export class AdminService {
   }
 
   async createPlatform(user: AuthUser, input: z.infer<typeof platformCreateSchema>) {
-    assertRole(user, ['OPS', 'BD', 'ADMIN']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
     return this.prisma.$transaction(async (tx) =>
       tx.platform.create({
         data: { code: await nextCode(tx, 'PF', 3), name: input.name, region: input.region ?? '', syncLag: input.syncLag, contact: input.contact ?? '', proposed: true, firstBatch: false, enabled: true },
@@ -83,9 +103,15 @@ export class AdminService {
   }
 
   async patchPlatform(user: AuthUser, id: string, input: z.infer<typeof platformPatchSchema>) {
-    assertRole(user, ['OPS', 'ADMIN', 'BD']);
-    if (input.firstBatch != null && user.role !== 'ADMIN') throw new ForbiddenException('首发名单只能由管理员调整');
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN', 'BD']);
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id } }));
+    const canConfirmFirst = user.role === 'ADMIN' || user.role === 'OPS_MANAGER';
+    if (input.firstBatch != null && input.firstBatch !== platform.firstBatch && !canConfirmFirst) {
+      throw new ForbiddenException('首发名单由运营主管或管理员确认');
+    }
+    if (input.enabled != null && input.enabled !== platform.enabled && platform.firstBatch && !canConfirmFirst) {
+      throw new ForbiddenException('首发平台的启停由运营主管或管理员确认');
+    }
     const enabled = input.enabled ?? platform.enabled;
     const firstBatch = input.firstBatch ?? platform.firstBatch;
     if (platform.firstBatch && platform.enabled && !(enabled && firstBatch)) {

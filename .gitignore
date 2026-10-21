@@ -8,6 +8,7 @@ dist-v2/
 # env & logs
 .env
 .env.local
+.env.demo
 *.log
 coverage/
 

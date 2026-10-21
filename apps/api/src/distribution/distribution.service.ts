@@ -11,6 +11,7 @@ import {
 } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
+import { hidesCommercialTerms, shareDto } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { toPlain } from '../core/plain';
@@ -18,7 +19,7 @@ import { PrismaService } from '../core/prisma.service';
 
 const planInclude = {
   drama: { select: { id: true, code: true, title: true, titleEn: true, companyId: true } },
-  company: { select: { id: true, name: true, ownerId: true } },
+  company: { select: { id: true, name: true, ownerId: true, bdId: true } },
   platforms: { include: { platform: true }, orderBy: { platform: { sort: 'asc' as const } } },
   shares: true,
 } satisfies Prisma.DistributionPlanInclude;
@@ -45,10 +46,13 @@ export class DistributionService {
         }),
         '剧目不存在',
       );
+      const licenseAssets = drama.assets.filter((asset) => asset.type === 'LICENSE' || asset.type === 'COPYRIGHT');
+      if (!licenseAssets.some((asset) => asset.reviewStatus === 'APPROVED')) {
+        throw new BadRequestException('授权书/版权证明须经运营审核通过后才能申请发行');
+      }
       const problems: string[] = [];
       const readyEpisodes = drama.episodes.filter((episode) => episode.fileKey);
       if (!readyEpisodes.length) problems.push('还没有上传成片');
-      if (!drama.assets.some((asset) => asset.type === 'LICENSE' || asset.type === 'COPYRIGHT')) problems.push('请先上传授权书或版权证明');
       const blocking = await tx.distributionPlan.findFirst({
         where: { dramaId: drama.id, round: input.round, status: { in: BLOCKING_PLAN_STATUSES } },
       });
@@ -114,6 +118,7 @@ export class DistributionService {
     const where: Prisma.DistributionPlanWhereInput = {};
     if (user.role === 'CLIENT') where.companyId = user.companyId!;
     else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     else if (user.role === 'FINANCE') where.status = 'SHARE_REVIEW';
     if (query.status) where.status = query.status as never;
     if (query.companyId && user.role !== 'CLIENT') where.companyId = query.companyId;
@@ -176,9 +181,58 @@ export class DistributionService {
     return this.getPlan(user, planId);
   }
 
-  async expand(user: AuthUser, planId: string) {
+  async assign(user: AuthUser, planId: string, assigneeId: string) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '分派由运营主管处理');
     const plan = await this.must(user, planId);
-    this.assertReviewer(user, plan);
+    if (!['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'].includes(plan.status)) {
+      throw new BadRequestException('当前状态不能改派');
+    }
+    const assignee = assertFound(await this.prisma.user.findUnique({ where: { id: assigneeId } }), '运营不存在');
+    if (assignee.role !== 'OPS' || assignee.disabled) throw new BadRequestException('只能分派给在岗运营专员');
+    const status = plan.status === 'PENDING_ASSIGN' ? 'PENDING_REVIEW' : plan.status;
+    await this.prisma.distributionPlan.update({ where: { id: planId }, data: { assigneeId, status } });
+    await this.audit.write(user.id, 'review.assign', 'DistributionPlan', planId, { assigneeId });
+    return this.getPlan(user, planId);
+  }
+
+  async reassign(user: AuthUser, planId: string, input: { assigneeId: string; reason?: string }) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '改派由运营主管处理');
+    const plan = await this.must(user, planId);
+    const updated = await this.assign(user, planId, input.assigneeId);
+    await this.audit.write(user.id, 'review.reassign', 'DistributionPlan', planId, { from: plan.assigneeId, to: input.assigneeId, reason: input.reason ?? '' });
+    return updated;
+  }
+
+  async spotCheck(user: AuthUser, input: { ratio: number; results?: { planId: string; result: 'PASS' | 'FAIL' | 'NOTE'; note?: string }[] }) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '抽检由运营主管处理');
+    if (input.results?.length) {
+      const created = [];
+      for (const item of input.results) {
+        assertFound(await this.prisma.distributionPlan.findUnique({ where: { id: item.planId } }), '工单不存在');
+        created.push(await this.prisma.reviewSpotCheck.create({
+          data: { planId: item.planId, checkedById: user.id, result: item.result, note: item.note ?? '' },
+        }));
+      }
+      await this.audit.write(user.id, 'review.spot_check', 'ReviewSpotCheck', created.map((row) => row.id).join(','), { count: created.length });
+      return { ok: true, recorded: created.length, items: created };
+    }
+    const pool = await this.prisma.distributionPlan.findMany({
+      where: { status: { in: ['SHARE_CONFIG', 'APPROVED', 'DISTRIBUTING', 'LIVE'] } },
+      select: { id: true, code: true, status: true, assigneeId: true, company: { select: { id: true, name: true } }, drama: { select: { id: true, title: true } } },
+      orderBy: { updatedAt: 'desc' },
+      take: 200,
+    });
+    const checked = new Set((await this.prisma.reviewSpotCheck.findMany({ where: { planId: { in: pool.map((row) => row.id) } }, select: { planId: true } })).map((row) => row.planId));
+    const candidates = pool.filter((row) => !checked.has(row.id));
+    const count = candidates.length ? Math.max(1, Math.min(candidates.length, Math.ceil(candidates.length * input.ratio))) : 0;
+    const items = candidates.slice(0, count);
+    await this.audit.write(user.id, 'review.spot_check', 'DistributionPlan', items.map((row) => row.id).join(','), { ratio: input.ratio, sampled: items.length });
+    return { ok: true, poolSize: pool.length, sampledCount: items.length, ratio: input.ratio, items };
+  }
+
+  async expand(user: AuthUser, planId: string) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '扩大抽检由运营主管处理');
+    const plan = await this.must(user, planId);
     if (plan.status !== 'IN_REVIEW') throw new BadRequestException('只有审核中的申请可以扩大抽检');
     await this.prisma.episode.updateMany({ where: { dramaId: plan.dramaId, reviewStatus: 'UNSAMPLED' }, data: { reviewStatus: 'PENDING' } });
     await this.audit.write(user.id, 'review.expand', 'DistributionPlan', planId);
@@ -269,7 +323,7 @@ export class DistributionService {
   }
 
   async reviewShares(user: AuthUser, planId: string, input: { pass: boolean; reason?: string }) {
-    assertRole(user, ['FINANCE', 'ADMIN'], '分成由财务或管理员复核');
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '分成由运营主管或管理员复核');
     const plan = await this.must(user, planId);
     if (plan.status !== 'SHARE_REVIEW') throw new BadRequestException('当前没有待复核的分成');
     if (plan.shares.some((share) => share.submittedById === user.id)) throw new ForbiddenException('不能复核自己提交的分成');
@@ -295,12 +349,12 @@ export class DistributionService {
   }
 
   async patchListing(user: AuthUser, listingId: string, input: { status: string; platformDramaId?: string; listingUrl?: string; listedAt?: string }) {
-    assertRole(user, ['BD', 'OPS', 'ADMIN']);
+    assertRole(user, ['BD', 'OPS', 'OPS_MANAGER', 'ADMIN']);
     const listing = assertFound(
       await this.prisma.planPlatform.findUnique({ where: { id: listingId }, include: { plan: { include: { company: true, platforms: true } } } }),
       '发行记录不存在',
     );
-    if (user.role === 'OPS') assertCompanyAccess(user, listing.plan.company);
+    if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, listing.plan.company);
     if (!['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(listing.plan.status)) {
       throw new BadRequestException('审核通过后才能录入上架结果');
     }
@@ -361,12 +415,12 @@ export class DistributionService {
 
   private async must(user: AuthUser, id: string) {
     const plan = assertFound(await this.prisma.distributionPlan.findUnique({ where: { id }, include: planInclude }), '发行申请不存在');
-    if (user.role === 'CLIENT' || user.role === 'OPS') assertCompanyAccess(user, plan.company);
+    if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, plan.company);
     return plan;
   }
 
   private assertReviewer(user: AuthUser, plan: { assigneeId: string | null; company: { id: string; ownerId: string | null } }) {
-    if (user.role === 'ADMIN') return;
+    if (user.role === 'ADMIN' || user.role === 'OPS_MANAGER') return;
     if (user.role !== 'OPS') throw new ForbiddenException('只有负责运营可以审核');
     if (plan.assigneeId && plan.assigneeId === user.id) return;
     assertCompanyAccess(user, plan.company);
@@ -402,7 +456,7 @@ export class DistributionService {
       phase,
       phaseLabel: phase === 'review' ? '审核中' : phase === 'action' ? '需要你处理' : phase === 'ready' ? '准备上架' : phase === 'live' ? '已上架' : phase === 'offline' ? '已下架' : phase === 'withdrawn' ? '已撤回' : '未发行',
       expectedFinish: plan.slaDueAt && ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW', 'NEEDS_REVISION'].includes(plan.status) ? `预计 ${formatCnDate(plan.slaDueAt)} 前完成` : null,
-      shares: user.role === 'CLIENT' ? plan.shares.map((share) => ({ id: share.id, platformId: share.platformId, clientRate: share.clientRate, overRate: share.overRate, reviewStatus: share.reviewStatus })) : plan.shares,
+      shares: hidesCommercialTerms(user.role) ? plan.shares.map((share) => shareDto(share as unknown as Record<string, unknown>)) : plan.shares,
     };
   }
 

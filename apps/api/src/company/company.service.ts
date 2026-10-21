@@ -58,15 +58,16 @@ export class CompanyService {
   }
 
   async list(user: AuthUser, query: { page: number; pageSize: number; q?: string; certStatus?: string }) {
-    assertRole(user, ['OPS', 'BD', 'FINANCE', 'ADMIN']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN']);
     const where: Prisma.CompanyWhereInput = {};
     if (user.role === 'OPS') where.ownerId = user.id;
+    if (user.role === 'BD') where.bdId = user.id;
     if (query.q) where.OR = [{ name: { contains: query.q, mode: 'insensitive' } }, { creditCode: { contains: query.q, mode: 'insensitive' } }];
     if (query.certStatus) where.certStatus = query.certStatus as never;
     const [items, total] = await Promise.all([
       this.prisma.company.findMany({
         where,
-        include: { owner: { select: { id: true, name: true } }, _count: { select: { dramas: true } } },
+        include: { owner: { select: { id: true, name: true } }, bd: { select: { id: true, name: true } }, _count: { select: { dramas: true } } },
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -80,11 +81,10 @@ export class CompanyService {
     const company = assertFound(
       await this.prisma.company.findUnique({
         where: { id },
-        include: { bankAccounts: true, owner: { select: { id: true, name: true, email: true } }, policy: true, _count: { select: { dramas: true } } },
+        include: { bankAccounts: true, owner: { select: { id: true, name: true, email: true } }, bd: { select: { id: true, name: true, email: true } }, policy: true, _count: { select: { dramas: true } } },
       }),
     );
-    if (user.role === 'CLIENT') assertCompanyAccess(user, company);
-    if (user.role === 'OPS') assertCompanyAccess(user, company);
+    if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
     return this.present(company, user);
   }
 
@@ -130,6 +130,17 @@ export class CompanyService {
     }
     await this.prisma.company.update({ where: { id }, data: { ownerId: input.ownerId } });
     await this.audit.write(user.id, 'company.owner', 'Company', id, { ownerId: input.ownerId });
+    return this.detail(user, id);
+  }
+
+  async setBd(user: AuthUser, id: string, bdId: string | null) {
+    assertRole(user, ['ADMIN', 'OPS_MANAGER']);
+    if (bdId) {
+      const bd = await this.prisma.user.findUnique({ where: { id: bdId } });
+      if (!bd || bd.role !== 'BD' || bd.disabled) throw new BadRequestException('负责商务必须是在岗商务账号');
+    }
+    await this.prisma.company.update({ where: { id }, data: { bdId } });
+    await this.audit.write(user.id, 'company.bd', 'Company', id, { bdId });
     return this.detail(user, id);
   }
 

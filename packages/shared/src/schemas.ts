@@ -13,7 +13,7 @@ import {
 } from './enums';
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD');
-const decimalStr = z.string().regex(/^-?\d+(\.\d{1,6})?$/, '金额格式不正确');
+const decimalStr = z.string().regex(/^-?\d+(\.\d{1,2})?$/, '金额最多保留两位小数');
 const rateStr = z.string().regex(/^\d+(\.\d{1,4})?$/, '比例格式不正确');
 
 export const registerSchema = z.object({
@@ -216,6 +216,12 @@ export const settlementGenerateSchema = z.object({
   periodEnd: dateStr,
 });
 
+export const settlementBatchSchema = z.object({
+  periodStart: dateStr,
+  periodEnd: dateStr,
+  companyIds: z.array(z.string().min(1)).max(500).optional(),
+});
+
 export const settlementAmountSchema = z.object({
   amountCny: decimalStr,
   internalNote: z.string().trim().min(1).max(1000),
@@ -231,6 +237,26 @@ export const settlementReviewSchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
+export const reviewReassignSchema = z.object({
+  assigneeId: z.string().min(1),
+  reason: z.string().trim().max(500).optional(),
+});
+
+export const spotCheckSchema = z.object({
+  ratio: z.number().gt(0).lte(1).default(0.1),
+  results: z
+    .array(z.object({
+      planId: z.string().min(1),
+      result: z.enum(['PASS', 'FAIL', 'NOTE']),
+      note: z.string().max(500).optional(),
+    }))
+    .optional(),
+});
+
+export const forcePublishSchema = z.object({
+  reason: z.string().trim().min(1).max(1000),
+});
+
 export const policySchema = z.object({
   cycleType: z.enum(CYCLE_TYPES),
   customDays: z.number().int().positive().max(366).optional(),
@@ -242,7 +268,7 @@ export const policySchema = z.object({
 export const withdrawalCreateSchema = z.object({
   settlementIds: z.array(z.string()).min(1),
   bankAccountId: z.string().min(1),
-  idempotencyKey: z.string().max(80).optional(),
+  idempotencyKey: z.string({ required_error: '提款请求必须携带幂等键', invalid_type_error: '提款请求必须携带幂等键' }).trim().min(1, '提款请求必须携带幂等键').max(80),
 });
 
 export const invoiceSchema = z.object({

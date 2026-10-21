@@ -13,7 +13,7 @@
     "build:shared": "pnpm --filter @shortform/shared build",
     "db:generate": "pnpm --filter @shortform/api exec prisma generate",
     "db:migrate": "pnpm --filter @shortform/api exec prisma migrate deploy",
-    "db:seed": "pnpm --filter @shortform/api exec tsx prisma/seed.ts",
+    "db:seed": "SEED_DEMO=true pnpm --filter @shortform/api exec tsx prisma/seed.ts",
     "db:setup": "pnpm env:sync && pnpm build:shared && pnpm db:generate && pnpm db:migrate && pnpm db:seed",
     "dev": "pnpm db:setup && pnpm --parallel --filter @shortform/api --filter @shortform/web dev",
     "dev:api": "pnpm --filter @shortform/api dev",

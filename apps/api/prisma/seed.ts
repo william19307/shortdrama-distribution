@@ -60,6 +60,10 @@ async function main() {
   }
 
   await ensureDemoClients(passwordHash);
+  await prisma.company.updateMany({
+    where: { name: { in: ['星河影业（杭州）', '青柠文化'] }, bdId: null },
+    data: { bdId: bd.id },
+  });
 
   const already = await prisma.user.findUnique({ where: { email: 'client@xinghe.example' } });
   if (already) {
@@ -80,6 +84,7 @@ async function main() {
       contactPhone: '13800001111',
       certStatus: 'APPROVED',
       ownerId: ops.id,
+      bdId: bd.id,
       bankAccounts: { create: { accountName: '星河影业（杭州）', bankName: '招商银行', branch: '杭州分行', accountNo: '6225880123456621', isDefault: true } },
       policy: { create: { cycleType: 'MONTH', anchorDate: new Date('2026-01-01T00:00:00.000Z'), note: '按自然月' } },
     },
@@ -87,7 +92,7 @@ async function main() {
   await prisma.user.create({ data: { email: 'client@xinghe.example', passwordHash, name: '林可', role: 'CLIENT', companyId: xinghe.id } });
 
   const qingning = await prisma.company.create({
-    data: { name: '青柠文化', creditCode: '91310000MA1YYYYY2Y', legalPerson: '周宁', contactName: '周宁', contactPhone: '13900002222', certStatus: 'PENDING', ownerId: ops.id },
+    data: { name: '青柠文化', creditCode: '91310000MA1YYYYY2Y', legalPerson: '周宁', contactName: '周宁', contactPhone: '13900002222', certStatus: 'PENDING', ownerId: ops.id, bdId: bd.id },
   });
   await prisma.user.create({ data: { email: 'client@qingning.example', passwordHash, name: '周宁', role: 'CLIENT', companyId: qingning.id } });
   await prisma.company.create({ data: { name: '远山文化', certStatus: 'UNVERIFIED' } });

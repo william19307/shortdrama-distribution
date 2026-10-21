@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID } from 'crypto';
+import { jwtSecret } from './auth';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import {
   CompleteMultipartUploadCommand,
@@ -24,11 +25,13 @@ export abstract class StorageService {
   abstract presignPart(key: string, uploadId: string, partNumber: number): Promise<string>;
   abstract completeMultipart(key: string, uploadId: string, parts: StoredPart[]): Promise<void>;
   abstract putObject(key: string, body: Buffer, contentType: string): Promise<void>;
+  abstract uploadPart(key: string, uploadId: string, partNumber: number, body: Buffer): Promise<string>;
   abstract getObject(key: string): Promise<Buffer>;
   abstract head(key: string): Promise<{ size: number } | null>;
 }
 
 const memoryObjects = new Map<string, Buffer>();
+const memoryParts = new Map<string, Buffer>();
 
 @Injectable()
 export class MemoryStorageService extends StorageService {
@@ -54,12 +57,19 @@ export class MemoryStorageService extends StorageService {
     return '';
   }
 
-  async completeMultipart() {
-    return;
+  async completeMultipart(key: string, uploadId: string, parts: StoredPart[]) {
+    const ordered = [...parts].sort((a, b) => a.partNumber - b.partNumber);
+    const chunks = ordered.map((part) => memoryParts.get(`${key}:${uploadId}:${part.partNumber}`) || Buffer.alloc(0));
+    memoryObjects.set(key, Buffer.concat(chunks));
   }
 
   async putObject(key: string, body: Buffer) {
     memoryObjects.set(key, body);
+  }
+
+  async uploadPart(key: string, uploadId: string, partNumber: number, body: Buffer) {
+    memoryParts.set(`${key}:${uploadId}:${partNumber}`, body);
+    return `"mem-${partNumber}"`;
   }
 
   async getObject(key: string) {
@@ -155,6 +165,11 @@ export class S3StorageService extends StorageService {
     await this.client.send(new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }));
   }
 
+  async uploadPart(key: string, uploadId: string, partNumber: number, body: Buffer) {
+    const out = await this.client.send(new UploadPartCommand({ Bucket: this.bucket, Key: key, UploadId: uploadId, PartNumber: partNumber, Body: body }));
+    return out.ETag || `"part-${partNumber}"`;
+  }
+
   async getObject(key: string) {
     const out = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
     const bytes = await out.Body?.transformToByteArray();
@@ -179,7 +194,7 @@ export function useMemoryStorage() {
 }
 
 export function signRead(key: string, exp: number) {
-  return createHmac('sha256', process.env.JWT_SECRET || 'dev-only-change-me').update(`${key}.${exp}`).digest('hex');
+  return createHmac('sha256', jwtSecret()).update(`${key}.${exp}`).digest('hex');
 }
 
 export function verifyRead(key: string, exp: number, sig: string) {

@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Put, Query, UseGuards } from '@nestjs/common';
-import { episodeDecisionSchema, listingPatchSchema, planCreateSchema, sharePutSchema, shareReviewSchema } from '@shortform/shared';
+import { episodeDecisionSchema, listingPatchSchema, planCreateSchema, reviewReassignSchema, sharePutSchema, shareReviewSchema, spotCheckSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -58,6 +58,21 @@ export class DistributionController {
     @Body(new ZodPipe(episodeDecisionSchema)) body: z.infer<typeof episodeDecisionSchema>,
   ) {
     return this.distribution.decideEpisode(user, id, episodeId, body);
+  }
+
+  @Post('reviews/:id/assign')
+  assign(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(z.object({ assigneeId: z.string().min(1) }))) body: { assigneeId: string }) {
+    return this.distribution.assign(user, id, body.assigneeId);
+  }
+
+  @Post('reviews/:id/reassign')
+  reassign(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(reviewReassignSchema)) body: z.infer<typeof reviewReassignSchema>) {
+    return this.distribution.reassign(user, id, body);
+  }
+
+  @Post('reviews/spot-check')
+  spotCheck(@CurrentUser() user: AuthUser, @Body(new ZodPipe(spotCheckSchema)) body: z.infer<typeof spotCheckSchema>) {
+    return this.distribution.spotCheck(user, body);
   }
 
   @Post('reviews/:id/expand')

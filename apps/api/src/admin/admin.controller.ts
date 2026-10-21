@@ -15,6 +15,11 @@ export class AdminController {
     return this.admin.workbench(user);
   }
 
+  @Get('admin/assignees')
+  assignees(@CurrentUser() user: AuthUser) {
+    return this.admin.assignees(user);
+  }
+
   @Get('admin/users')
   users(@CurrentUser() user: AuthUser, @Query(new ZodPipe(pageSchema)) query: z.infer<typeof pageSchema>) {
     return this.admin.users(user, query);

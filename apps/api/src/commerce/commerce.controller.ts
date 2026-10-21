@@ -9,6 +9,7 @@ import {
   policySchema,
   rateSchema,
   settlementAmountSchema,
+  settlementBatchSchema,
   settlementGenerateSchema,
   settlementReviewSchema,
   withdrawalCreateSchema,
@@ -65,6 +66,11 @@ export class CommerceController {
     return this.commerce.generate(user, body);
   }
 
+  @Post('settlements/generate-batch')
+  generateBatch(@CurrentUser() user: AuthUser, @Body(new ZodPipe(settlementBatchSchema)) body: z.infer<typeof settlementBatchSchema>) {
+    return this.commerce.generateBatch(user, body);
+  }
+
   @Get('settlements/:id')
   settlement(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.commerce.getSettlement(user, id);
@@ -111,8 +117,8 @@ export class CommerceController {
   }
 
   @Get('rates')
-  rates() {
-    return this.commerce.listRates();
+  rates(@CurrentUser() user: AuthUser) {
+    return this.commerce.listRates(user);
   }
 
   @Post('rates')

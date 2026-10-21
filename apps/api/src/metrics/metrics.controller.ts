@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { dailyListSchema, dailyStatSchema, pageSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
+import { dailyListSchema, dailyStatSchema, forcePublishSchema, pageSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -37,9 +37,27 @@ export class MetricsController {
     return this.metrics.reviewDaily(user, id);
   }
 
+  @Post('daily-stats/:id/report')
+  reportDaily(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodPipe(z.object({ note: z.string().trim().min(1).max(500) }))) body: { note: string },
+  ) {
+    return this.metrics.reportDaily(user, id, body.note);
+  }
+
   @Post('daily-stats/:id/lock')
   lockDaily(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.metrics.lockDaily(user, id);
+  }
+
+  @Post('daily-stats/:id/force-publish')
+  forcePublish(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodPipe(forcePublishSchema)) body: z.infer<typeof forcePublishSchema>,
+  ) {
+    return this.metrics.forcePublish(user, id, body.reason);
   }
 
   @Post('watermarks')

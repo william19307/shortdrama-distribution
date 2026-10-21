@@ -62,6 +62,43 @@ export const bizStatus = {
 } as const;
 export type BizStatus = keyof typeof bizStatus;
 
+export type BizTone = 'neutral' | 'warning' | 'success' | 'error' | 'info' | 'brand';
+
+/** 业务状态色。页面只调用这个函数，不在业务代码里写死颜色。 */
+const BIZ_TONE: Record<BizTone, readonly string[]> = {
+  error: ['NEEDS_REVISION', 'PRECHECK_FAILED', 'REJECTED', 'ANOMALY', 'REJECTED_BY_PLATFORM'],
+  success: ['LIVE', 'APPROVED', 'PAID', 'EFFECTIVE', 'LISTED', 'LOCKED', 'REVIEWED', 'RESOLVED', 'REPLACED'],
+  warning: ['SHARE_REVIEW', 'PENDING_REVIEW', 'INVOICE_REVIEW', 'PENDING', 'PENDING_CLIENT', 'IN_REVIEW', 'VERIFYING', 'PAYING', 'BELOW_MINIMUM', 'DRAFTING', 'CHANGE_PENDING', 'PENDING_MATCH'],
+  neutral: ['OFFLINE', 'WITHDRAWN', 'NO_SETTLEMENT', 'EXPIRED', 'DRAFT', 'CLOSED', 'DELISTED', 'UNSAMPLED', 'UNVERIFIED'],
+  brand: ['SHARE_CONFIG'],
+  info: ['PENDING_ASSIGN', 'PENDING_APPLY', 'PENDING_INVOICE', 'DISTRIBUTING', 'APPLYING', 'PENDING_SIGN', 'IN_CONTACT', 'CREATED', 'READ', 'IN_PROGRESS', 'PENDING_ENTRY', 'PENDING_LISTING', 'PENDING_CONTACT'],
+};
+
+export function bizToneFor(status: string): BizTone {
+  for (const tone of Object.keys(BIZ_TONE) as BizTone[]) {
+    if (BIZ_TONE[tone].includes(status)) return tone;
+  }
+  return 'info';
+}
+
+/** 首发平台色。未知名平台用中性灰。 */
+export const platform = {
+  ReelShort: { color: '#E8173A', code: 'RS' },
+  DramaBox: { color: '#7C4DFF', code: 'DB' },
+  ShortMax: { color: '#00A3A3', code: 'SM' },
+  FlexTV: { color: '#F59E0B', code: 'FT' },
+  GoodShort: { color: '#3B82F6', code: 'GS' },
+} as const;
+
+export function platformOf(name: string) {
+  const known = platform[name as keyof typeof platform];
+  if (known) return known;
+  const code = name.replace(/\s+/g, '').slice(0, 2).toUpperCase() || 'PF';
+  return { color: '#86868B', code };
+}
+
+export const rank = { gold: '#E8C872', silver: '#C5CDD6', bronze: '#D08A56' } as const;
+
 /** 图表配色：主色领衔，其余低饱和以保持电影感 */
 export const chart = {
   categorical: ['#D6153C', '#FF7B95', '#4C9AFF', '#46D369', '#F5A524', '#A78BFA', '#2DD4BF', '#86868B'],
@@ -71,7 +108,7 @@ export const chart = {
 } as const;
 
 export const font = {
-  family: '"Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif',
+  family: '"Source Han Sans SC","Noto Sans SC","Source Han Sans","Noto Sans CJK SC","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Inter","SF Pro Display",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
   mono: 'ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace',
   weight: { regular: 400, medium: 500, semibold: 600, bold: 700, heavy: 800, black: 900 },
 } as const;
@@ -159,5 +196,5 @@ export const density = {
 } as const;
 export type Density = keyof typeof density;
 
-export const tokens = { brand, neutral, status, colors, bizStatus, chart, font, typeScale, space, layout, radius, shadow, gradient, motion, density } as const;
+export const tokens = { brand, neutral, status, colors, bizStatus, bizToneFor, platform, platformOf, rank, chart, font, typeScale, space, layout, radius, shadow, gradient, motion, density } as const;
 export default tokens;

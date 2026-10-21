@@ -14,7 +14,7 @@ import {
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound, safeFilename } from '../core/access';
 import { AuditService } from '../core/audit.service';
-import { AuthUser, nextCode } from '../core/auth';
+import { assertRole, AuthUser, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 import { StorageService } from '../core/storage.service';
 
@@ -185,11 +185,21 @@ export class CatalogService {
   }
 
   async putContent(user: AuthUser, id: string, body: Buffer) {
-    if (this.storage.driver() !== 'memory') throw new NotFoundException();
+    if (!this.viaApi()) throw new NotFoundException();
     const session = await this.ownSession(user, id);
     if (body.length === 0) throw new BadRequestException('文件是空的');
     await this.storage.putObject(session.key, body, session.contentType);
     return { ok: true, size: body.length };
+  }
+
+  async putPart(user: AuthUser, id: string, partNumber: number, body: Buffer) {
+    if (!this.viaApi()) throw new NotFoundException();
+    const session = await this.ownSession(user, id);
+    if (!session.uploadId) throw new BadRequestException('这个文件使用整文件直传，不需要分片');
+    if (body.length === 0) throw new BadRequestException('分片是空的');
+    const etag = await this.storage.uploadPart(session.key, session.uploadId, partNumber, body);
+    await this.ackPart(user, id, partNumber, etag);
+    return { ok: true, partNumber, etag };
   }
 
   async complete(user: AuthUser, id: string, parts?: { partNumber: number; etag: string }[]) {
@@ -267,12 +277,17 @@ export class CatalogService {
     }
   }
 
+  private viaApi() {
+    return this.storage.driver() === 'memory' || process.env.UPLOAD_VIA_API === 'true';
+  }
+
   private async presentSession(session: UploadSession, contentType: string) {
     const size = Number(session.size);
     const multipart = this.storage.driver() === 's3' && size > SINGLE_PUT_MAX;
+    const viaApi = this.viaApi();
     if (!multipart) {
-      const signed = this.storage.driver() === 'memory' ? { url: `/api/storage/uploads/${session.id}/content`, headers: {} } : await this.storage.presignPut(session.key, contentType);
-      return { id: session.id, key: session.key, mode: 'single' as const, url: signed.url, headers: signed.headers, size };
+      const signed = viaApi ? { url: `/api/storage/uploads/${session.id}/content`, headers: {} } : await this.storage.presignPut(session.key, contentType);
+      return { id: session.id, key: session.key, mode: 'single' as const, viaApi, url: signed.url, headers: signed.headers, size };
     }
     const uploadId = session.uploadId ?? (await this.storage.createMultipart(session.key, contentType));
     if (!session.uploadId) await this.prisma.uploadSession.update({ where: { id: session.id }, data: { uploadId } });
@@ -281,6 +296,7 @@ export class CatalogService {
       id: session.id,
       key: session.key,
       mode: 'multipart' as const,
+      viaApi,
       uploadId,
       partSize: PART_SIZE,
       partCount,
@@ -289,12 +305,32 @@ export class CatalogService {
     };
   }
 
+  async reviewAsset(user: AuthUser, id: string, input: { pass: boolean; reason?: string }) {
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN'], '授权材料由运营审核');
+    const asset = assertFound(
+      await this.prisma.asset.findUnique({ where: { id }, include: { company: true } }),
+      '授权材料不存在',
+    );
+    if (!['LICENSE', 'COPYRIGHT'].includes(asset.type)) throw new BadRequestException('只能审核授权书或版权证明');
+    if (user.role === 'OPS') assertCompanyAccess(user, asset.company);
+    if (!input.pass && !input.reason) throw new BadRequestException('驳回时请填写原因');
+    return this.prisma.asset.update({
+      where: { id },
+      data: {
+        reviewStatus: input.pass ? 'APPROVED' : 'REJECTED',
+        reviewedById: user.id,
+        reviewedAt: new Date(),
+        rejectReason: input.pass ? null : input.reason,
+      },
+    });
+  }
+
   private async ownSession(user: AuthUser, id: string) {
     const session = assertFound(await this.prisma.uploadSession.findUnique({ where: { id } }), '上传会话不存在');
     if (user.role === 'CLIENT' && session.companyId !== user.companyId) throw new ForbiddenException('不能使用别人的上传会话');
-    if (user.role !== 'CLIENT' && user.role !== 'ADMIN') {
-      const company = await this.prisma.company.findUnique({ where: { id: session.companyId } });
-      if (user.role === 'OPS' && company?.ownerId !== user.id) throw new ForbiddenException('不能使用这个上传会话');
+    if (user.role === 'OPS' || user.role === 'BD') {
+      const company = assertFound(await this.prisma.company.findUnique({ where: { id: session.companyId } }), '客户不存在');
+      assertCompanyAccess(user, company);
     }
     return session;
   }
@@ -310,7 +346,7 @@ export class CatalogService {
         throw new ForbiddenException('财务不上传剧目文件');
       }
       const company = assertFound(await this.prisma.company.findUnique({ where: { id: input.companyId } }), '客户不存在');
-      if (user.role === 'OPS') assertCompanyAccess(user, company);
+      if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
       return company.id;
     }
     throw new BadRequestException('请先选择剧目或客户');
@@ -326,6 +362,7 @@ export class CatalogService {
     const where: Prisma.DramaWhereInput = {};
     if (user.role === 'CLIENT') where.companyId = user.companyId!;
     else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     if (query.companyId && user.role !== 'CLIENT') where.companyId = query.companyId;
     if (query.genre) where.genre = query.genre;
     if (query.language) where.language = query.language;
@@ -366,13 +403,13 @@ export class CatalogService {
           episodes: { orderBy: { no: 'asc' } },
           assets: { orderBy: { createdAt: 'desc' } },
           plans: { include: { platforms: true, shares: true }, orderBy: { createdAt: 'desc' } },
-          company: { select: { id: true, ownerId: true, name: true } },
+          company: { select: { id: true, ownerId: true, bdId: true, name: true } },
         },
       }),
       '剧目不存在',
     );
     if (user.role === 'FINANCE') throw new ForbiddenException('财务账号不查看视频库');
-    if (user.role === 'CLIENT' || user.role === 'OPS') assertCompanyAccess(user, drama.company);
+    if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
     return drama;
   }
 
@@ -388,7 +425,7 @@ export class CatalogService {
     const companyId = key.split('/')[0];
     if (!companyId) throw new ForbiddenException('文件路径不正确');
     const company = assertFound(await this.prisma.company.findUnique({ where: { id: companyId } }), '文件不存在');
-    if (user.role === 'CLIENT' || user.role === 'OPS') assertCompanyAccess(user, company);
+    if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
     if (user.role === 'FINANCE') throw new ForbiddenException('没有权限查看这个文件');
   }
 }

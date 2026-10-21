@@ -14,7 +14,7 @@ import { TicketsPage } from './pages/Tickets';
 import { CompanyPage } from './pages/Company';
 import { ContractsPage } from './pages/Contracts';
 import { SettlementsPage, WithdrawalsPage } from './pages/Money';
-import { WorkbenchPage, CompaniesPage, ReviewsPage, SharesPage, DailyPage, WatermarksPage, PlatformsPage, UsersPage, SettingsPage, AuditPage, TasksPage } from './pages/Ops';
+import { WorkbenchPage, CompaniesPage, ReviewsPage, SharesPage, DailyPage, WatermarksPage, PlatformsPage, UsersPage, SettingsPage, AuditPage, TasksPage, RatesPage } from './pages/Ops';
 
 function Gate({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -58,6 +58,7 @@ export function AppRoutes() {
             <Route path="/shares" element={<SharesPage />} />
             <Route path="/shares/:id" element={<SharesPage />} />
             <Route path="/daily" element={<DailyPage />} />
+            <Route path="/rates" element={<RatesPage />} />
             <Route path="/watermarks" element={<WatermarksPage />} />
             <Route path="/platforms" element={<PlatformsPage />} />
             <Route path="/users" element={<UsersPage />} />

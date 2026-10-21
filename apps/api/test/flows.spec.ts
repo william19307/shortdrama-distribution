@@ -74,15 +74,23 @@ describe('核心流程', () => {
     expect(opsRes.status).toBeLessThan(300);
     const finRes = await authed(admin.token).post('/api/admin/users').send({ email: 'fin-test@studio.example', password: PASS, name: '测试财务', role: 'FINANCE' });
     expect(finRes.status).toBeLessThan(300);
+    const mgrRes = await authed(admin.token).post('/api/admin/users').send({ email: 'mgr-test@studio.example', password: PASS, name: '测试主管', role: 'OPS_MANAGER' });
+    expect(mgrRes.status).toBeLessThan(300);
     const ops = await login('ops-test@studio.example');
     const finance = await login('fin-test@studio.example');
+    const manager = await login('mgr-test@studio.example');
 
     for (const name of ['ReelShort', 'DramaBox', 'ShortMax', 'FlexTV', 'GoodShort']) {
       const created = await authed(admin.token).post('/api/platforms').send({ name, syncLag: name === 'ShortMax' ? 'T2' : 'T1' });
       expect(created.status).toBeLessThan(300);
       const patched = await authed(admin.token).patch(`/api/platforms/${created.body.id}`).send({ firstBatch: true, enabled: true });
       expect(patched.status).toBeLessThan(300);
+      const opsFirst = await authed(ops.token).patch(`/api/platforms/${created.body.id}`).send({ enabled: false });
+      expect(opsFirst.status).toBe(403);
     }
+    const listed = await authed(manager.token).get('/api/platforms');
+    const confirmed = await authed(manager.token).patch(`/api/platforms/${listed.body[0].id}`).send({ firstBatch: true });
+    expect(confirmed.status).toBeLessThan(300);
 
     const registered = await request(app.getHttpServer()).post('/api/auth/register').send({
       email: 'client-test@studio.example',
@@ -93,6 +101,9 @@ describe('核心流程', () => {
     expect(registered.status).toBeLessThan(300);
     const clientToken = registered.body.accessToken as string;
     const companyId = registered.body.user.companyId as string;
+    const mgrCompanies = await authed(manager.token).get('/api/companies?page=1&pageSize=20');
+    expect(mgrCompanies.status).toBeLessThan(300);
+    expect(mgrCompanies.body.total).toBeGreaterThan(0);
     await authed(admin.token).patch(`/api/companies/${companyId}/owner`).send({ ownerId: ops.user.id });
 
     const cert = await authed(clientToken).put('/api/company/certification').send({
@@ -120,6 +131,12 @@ describe('核心流程', () => {
     const dramaId = drama.body.id as string;
     await upload(clientToken, 'ep1.mp4', Buffer.from('episode-one'), 'EPISODE', { dramaId, episodeNo: 1 });
     await upload(clientToken, 'license.pdf', Buffer.from('license'), 'LICENSE', { dramaId });
+    const pendingPlan = await authed(clientToken).post('/api/plans').send({ dramaId, round: 'FIRST' });
+    expect(pendingPlan.status).toBe(400);
+    expect(pendingPlan.body.message).toContain('审核通过');
+    const license = await prisma.asset.findFirst({ where: { dramaId, type: 'LICENSE' } });
+    const approvedLicense = await authed(ops.token).post(`/api/assets/${license!.id}/review`).send({ pass: true });
+    expect(approvedLicense.status).toBeLessThan(300);
 
     const platforms = await authed(clientToken).get('/api/platforms');
     const firstIds = (platforms.body as { id: string; firstBatch: boolean }[]).filter((item) => item.firstBatch).map((item) => item.id);
@@ -135,6 +152,14 @@ describe('核心流程', () => {
 
     const opened = await authed(ops.token).post(`/api/reviews/${planId}/open`);
     expect(opened.status).toBeLessThan(300);
+    const opsAssign = await authed(ops.token).post(`/api/reviews/${planId}/assign`).send({ assigneeId: ops.user.id });
+    expect(opsAssign.status).toBe(403);
+    const assigned = await authed(manager.token).post(`/api/reviews/${planId}/assign`).send({ assigneeId: ops.user.id });
+    expect(assigned.status).toBeLessThan(300);
+    const opsExpand = await authed(ops.token).post(`/api/reviews/${planId}/expand`);
+    expect(opsExpand.status).toBe(403);
+    const expanded = await authed(manager.token).post(`/api/reviews/${planId}/expand`);
+    expect(expanded.status).toBeLessThan(300);
     const episodeId = opened.body.episodes[0].id as string;
     const rejected = await authed(ops.token).post(`/api/reviews/${planId}/episodes/${episodeId}`).send({ decision: 'REJECTED', reason: '字幕需要修改' });
     expect(rejected.status).toBeLessThan(300);
@@ -169,7 +194,9 @@ describe('核心流程', () => {
 
     const selfShare = await authed(admin.token).post(`/api/plans/${planId}/shares/review`).send({ pass: true });
     expect(selfShare.status).toBe(403);
-    const shareOk = await authed(finance.token).post(`/api/plans/${planId}/shares/review`).send({ pass: true });
+    const financeShare = await authed(finance.token).post(`/api/plans/${planId}/shares/review`).send({ pass: true });
+    expect(financeShare.status).toBe(403);
+    const shareOk = await authed(manager.token).post(`/api/plans/${planId}/shares/review`).send({ pass: true });
     expect(shareOk.status).toBeLessThan(300);
     expect(shareOk.body.status).toBe('APPROVED');
     const tickets = await authed(clientToken).get('/api/tickets?page=1&pageSize=20');
@@ -199,6 +226,16 @@ describe('核心流程', () => {
       watermarkId: shot.body.id,
     });
     expect(daily.status).toBeLessThan(300);
+    const opsForce = await authed(ops.token).post(`/api/daily-stats/${daily.body.id}/force-publish`).send({ reason: '专员不能代发' });
+    expect(opsForce.status).toBe(403);
+    const forced = await authed(manager.token).post(`/api/daily-stats/${daily.body.id}/force-publish`).send({ reason: '主管确认后发布' });
+    expect(forced.status).toBeLessThan(300);
+    expect(forced.body.status).toBe('REVIEWED');
+    const opsReport = await authed(ops.token).post(`/api/daily-stats/${daily.body.id}/report`).send({ note: '播放对不上' });
+    expect(opsReport.status).toBe(403);
+    const reported = await authed(manager.token).post(`/api/daily-stats/${daily.body.id}/report`).send({ note: '播放对不上' });
+    expect(reported.status).toBeLessThan(300);
+    expect(reported.body.status).toBe('ANOMALY');
     const selfDaily = await authed(ops.token).post(`/api/daily-stats/${daily.body.id}/review`);
     expect(selfDaily.status).toBe(403);
     const reviewed = await authed(finance.token).post(`/api/daily-stats/${daily.body.id}/review`);
@@ -210,6 +247,8 @@ describe('核心流程', () => {
 
     const small = await authed(ops.token).post('/api/settlements/generate').send({ companyId, periodStart: '2026-10-01', periodEnd: '2026-10-31' });
     expect(small.status).toBeLessThan(300);
+    const badMoney = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.123', internalNote: '三位小数' });
+    expect(badMoney.status).toBe(400);
     const entered = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '手工应结，内部可见' });
     expect(entered.status).toBeLessThan(300);
     const selfSettle = await authed(admin.token).post(`/api/settlements/${small.body.id}/review`).send({ pass: true });
@@ -223,7 +262,10 @@ describe('核心流程', () => {
     expect(ready.body.status).toBe('PENDING_APPLY');
     const clientSettle = await authed(clientToken).get(`/api/settlements/${small.body.id}`);
     expect(clientSettle.body.internalNote).toBeUndefined();
+    expect(clientSettle.body.referenceCny).toBeUndefined();
+    expect(clientSettle.body.deviationPct).toBeUndefined();
     expect(JSON.stringify(clientSettle.body)).not.toContain('手工应结');
+    expect(JSON.stringify(clientSettle.body)).not.toContain('referenceCny');
 
     const tooSmall = await authed(clientToken).post('/api/withdrawals').send({ settlementIds: [small.body.id], bankAccountId: bank.body.id });
     expect(tooSmall.status).toBe(400);

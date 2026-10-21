@@ -4,7 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { AuditService } from './audit.service';
 import { SettingsService } from './settings.service';
-import { JwtStrategy } from './auth';
+import { JwtStrategy, jwtSecret } from './auth';
 import { PlainInterceptor } from './http';
 import { PrismaService } from './prisma.service';
 import { MemoryStorageService, S3StorageService, StorageLifecycle, StorageService, useMemoryStorage } from './storage.service';
@@ -14,7 +14,7 @@ import { MemoryStorageService, S3StorageService, StorageLifecycle, StorageServic
   imports: [
     PassportModule,
     JwtModule.register({
-      secret: process.env.JWT_SECRET || 'dev-only-change-me',
+      secret: jwtSecret(),
       signOptions: { expiresIn: '7d' },
     }),
   ],

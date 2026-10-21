@@ -8,7 +8,7 @@ import { EPISODE_CLIENT, ErrorNote, PageHead, PhaseTag, PlatformChip, StatusTag,
 
 interface Platform { id: string; name: string; firstBatch: boolean; enabled: boolean }
 interface Episode { id: string; no: number; fileName: string | null; reviewStatus: string; rejectReason: string | null; fileSize: string | null }
-interface Asset { id: string; type: string; name: string; fileKey: string }
+interface Asset { id: string; type: string; name: string; fileKey: string; reviewStatus?: string; rejectReason?: string | null }
 interface Plan {
   id: string; code: string; status: string; round: string; statusLabel?: string; phase?: string; phaseLabel?: string;
   expectedFinish?: string | null; precheckNote?: string | null; rejectSummary?: string | null;
@@ -27,7 +27,7 @@ export function DramaPage() {
   const { message } = App.useApp();
   const { user } = useAuth();
   const client = user?.role === 'CLIENT';
-  const staffReview = user?.role === 'OPS' || user?.role === 'ADMIN';
+  const staffReview = user?.role === 'OPS' || user?.role === 'OPS_MANAGER' || user?.role === 'ADMIN';
   const [drama, setDrama] = useState<Drama | null>(null);
   const [error, setError] = useState('');
   const [platforms, setPlatforms] = useState<Platform[]>([]);
@@ -176,7 +176,16 @@ export function DramaPage() {
                       <Upload showUploadList={false} beforeUpload={(file) => { sendFile(file, 'COPYRIGHT'); return false; }}><Button>上传版权证明</Button></Upload>
                     </Space>
                   ) : null}
-                  {drama.assets.map((asset) => <div key={asset.id}><Tag>{asset.type === 'LICENSE' ? '授权书' : asset.type === 'COPYRIGHT' ? '版权证明' : asset.type}</Tag> {asset.name}</div>)}
+                  {drama.assets.map((asset) => (
+                    <Space key={asset.id}>
+                      <Tag>{asset.type === 'LICENSE' ? '授权书' : asset.type === 'COPYRIGHT' ? '版权证明' : asset.type}</Tag>
+                      <span>{asset.name}</span>
+                      {asset.reviewStatus ? <StatusTag status={asset.reviewStatus} /> : null}
+                      {staffReview && (asset.type === 'LICENSE' || asset.type === 'COPYRIGHT') && asset.reviewStatus !== 'APPROVED' ? (
+                        <Button size="small" type="primary" onClick={async () => { try { await api(`/assets/${asset.id}/review`, { method: 'POST', json: { pass: true } }); message.success('授权材料已通过'); const next = await api<Drama>(`/dramas/${id}`); setDrama(next); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>审核通过</Button>
+                      ) : null}
+                    </Space>
+                  ))}
                   {!drama.assets.length ? <span style={{ color: 'var(--ds-text-3)' }}>还没有授权材料。申请发行前需要授权书或版权证明。</span> : null}
                 </Space>
               ),

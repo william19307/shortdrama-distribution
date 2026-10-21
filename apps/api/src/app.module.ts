@@ -8,6 +8,7 @@ import { CoreModule } from './core/core.module';
 import { DistributionModule } from './distribution/distribution.module';
 import { JobsModule } from './jobs/jobs.module';
 import { MetricsModule } from './metrics/metrics.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Controller('health')
 class HealthController {
@@ -18,7 +19,7 @@ class HealthController {
 }
 
 @Module({
-  imports: [CoreModule, AuthModule, CompanyModule, CatalogModule, DistributionModule, MetricsModule, CommerceModule, AdminModule, JobsModule],
+  imports: [CoreModule, AuthModule, CompanyModule, CatalogModule, DistributionModule, MetricsModule, CommerceModule, AdminModule, NotificationsModule, JobsModule],
   controllers: [HealthController],
 })
 export class AppModule {}

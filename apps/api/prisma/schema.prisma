@@ -207,8 +207,10 @@ model User {
   updatedAt    DateTime @updatedAt
 
   ownedCompanies Company[] @relation("CompanyOwner")
+  bdCompanies    Company[] @relation("CompanyBd")
   auditLogs      AuditLog[]
   tasks          AsyncTask[]
+  notifications  Notification[]
 
   @@index([role])
   @@index([companyId])
@@ -227,6 +229,8 @@ model Company {
   certDraft     Json?
   ownerId       String?
   owner         User?      @relation("CompanyOwner", fields: [ownerId], references: [id])
+  bdId          String?
+  bd            User?      @relation("CompanyBd", fields: [bdId], references: [id])
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -245,6 +249,7 @@ model Company {
 
   @@index([certStatus])
   @@index([ownerId])
+  @@index([bdId])
   @@index([name])
 }
 
@@ -403,6 +408,7 @@ model DistributionPlan {
   platforms PlanPlatform[]
   shares    ShareConfig[]
   reviewLogs ReviewLog[]
+  spotChecks ReviewSpotCheck[]
   policy    ProjectSettlementPolicy?
   contracts Contract[]
   tickets   Ticket[]
@@ -780,4 +786,39 @@ model IdempotencyKey {
 model Counter {
   id    String @id
   value Int
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String
+  title      String
+  body       String    @default("")
+  entityType String?
+  entityId   String?
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, readAt])
+  @@index([type, entityId])
+}
+
+enum SpotCheckResult {
+  PASS
+  FAIL
+  NOTE
+}
+
+model ReviewSpotCheck {
+  id          String          @id @default(cuid())
+  planId      String
+  plan        DistributionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  checkedById String
+  result      SpotCheckResult
+  note        String          @default("")
+  createdAt   DateTime        @default(now())
+
+  @@index([planId, createdAt])
 }

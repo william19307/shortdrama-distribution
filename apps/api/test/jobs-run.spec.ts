@@ -38,6 +38,7 @@ describe('手动触发定时任务', () => {
     const admin = await login(adminEmail);
     const ran = await request(app.getHttpServer()).post('/api/admin/jobs/daily-stats-warn/run').set('Authorization', `Bearer ${admin}`);
     expect(ran.status).toBeLessThan(300);
+    expect(typeof ran.body.notified).toBe('number');
     expect(ran.body.job).toBe('daily-stats-warn');
     const again = await request(app.getHttpServer()).post('/api/admin/jobs/daily-stats-warn/run').set('Authorization', `Bearer ${admin}`);
     expect(again.status).toBeLessThan(300);

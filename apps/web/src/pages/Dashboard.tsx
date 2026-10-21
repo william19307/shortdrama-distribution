@@ -22,6 +22,8 @@ interface Dash {
   delta: number | null;
   trend: { date: string; views: number; revenueCny: string }[];
   top: { dramaId: string; title: string; views: number }[];
+  updating?: boolean;
+  updatingLabel?: string;
 }
 
 const PLATFORM_KEYS = new Set<string>(['ReelShort', 'DramaBox', 'ShortMax', 'FlexTV', 'GoodShort']);
@@ -99,6 +101,7 @@ export function DashboardPage() {
   return (
     <div>
       <PageHead title={client ? '数据总览' : '数据看板'} hint={data?.conclusion} />
+      {client && data?.updating ? <div style={{ margin: '0 0 12px', fontWeight: 600, color: '#cf1322' }}>{data.updatingLabel || '数据更新中'}</div> : null}
       <ErrorNote error={error} />
       <motion.div className="stat-row" {...chartMotion.list}>
         <Stat label="播放" value={data ? data.views.toLocaleString('en-US') : '—'} delta={delta} up={deltaUp} />

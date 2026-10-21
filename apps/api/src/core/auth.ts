@@ -20,7 +20,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: process.env.JWT_SECRET || 'dev-only-change-me',
+      secretOrKey: jwtSecret(),
     });
   }
 
@@ -53,4 +53,12 @@ export async function nextCode(tx: Prisma.TransactionClient, prefix: string, pad
 
 export function day(iso: string) {
   return new Date(`${iso}T00:00:00.000Z`);
+}
+
+export function jwtSecret() {
+  const secret = process.env.JWT_SECRET;
+  if (process.env.NODE_ENV === 'production' && (!secret || secret.length < 32 || secret.startsWith('change-me'))) {
+    throw new Error('生产环境必须配置不少于 32 位、且不以 change-me 开头的 JWT_SECRET');
+  }
+  return secret || 'dev-only-change-me';
 }

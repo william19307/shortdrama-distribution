@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+**/dist-seed
+.git
+**/.env
+**/.env.demo
+apps/api/test
+docs
+apps/proto-v3
+apps/marketing-site
+**/*.html
+!apps/web/index.html

@@ -54,12 +54,15 @@ export function CompaniesPage() {
   const [q, setQ] = useState('');
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
-  const [staff, setStaff] = useState<{ id: string; name: string }[]>([]);
+  const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
   const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
   const load = () => api<Page<Record<string, unknown>>>(`/companies${qs({ q, page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [q, page]);
   useEffect(() => { if (id) api<Record<string, any>>(`/companies/${id}`).then(setDetail).catch((err) => setError(err.message)); }, [id]);
-  useEffect(() => { if (user?.role === 'ADMIN') api<Page<{ id: string; name: string; role: string }>>('/admin/users?page=1&pageSize=100').then((res) => setStaff(res.items.filter((item) => item.role === 'OPS'))).catch(() => undefined); }, [user?.role]);
+  useEffect(() => {
+    if (user?.role !== 'ADMIN' && user?.role !== 'OPS_MANAGER') return;
+    api<{ id: string; name: string; role: string }[]>('/admin/assignees').then(setStaff).catch(() => undefined);
+  }, [user?.role]);
 
   return (
     <div>
@@ -74,7 +77,8 @@ export function CompaniesPage() {
         columns={[
           { title: '企业', dataIndex: 'name' },
           { title: '认证', dataIndex: 'certStatus', render: (value) => <StatusTag status={value} /> },
-          { title: '负责人', dataIndex: ['owner', 'name'], render: (value) => value || '未分配' },
+          { title: '负责运营', dataIndex: ['owner', 'name'], render: (value) => value || '未分配' },
+          { title: '负责商务', dataIndex: ['bd', 'name'], render: (value) => value || '未分配' },
           { title: '剧目', dataIndex: ['_count', 'dramas'] },
         ]}
       />
@@ -88,15 +92,23 @@ export function CompaniesPage() {
               <Button danger onClick={async () => { const reason = window.prompt('驳回原因') || ''; if (!reason) return; await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: false, reason } }); load(); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); }}>驳回</Button>
             </Space>
           ) : null}
-          {user?.role === 'ADMIN' ? (
-            <div style={{ marginTop: 12 }}>
+          {user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER' ? (
+            <Space style={{ marginTop: 12 }} wrap>
+              {user.role === 'ADMIN' ? (
+                <Select
+                  style={{ width: 220 }}
+                  placeholder="指定负责运营"
+                  options={staff.filter((item) => item.role === 'OPS').map((item) => ({ value: item.id, label: item.name }))}
+                  onChange={async (ownerId) => { await api(`/companies/${detail.id}/owner`, { method: 'PATCH', json: { ownerId } }); message.success('已更新负责运营'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
+                />
+              ) : null}
               <Select
-                style={{ width: 240 }}
-                placeholder="指定负责运营"
-                options={staff.map((item) => ({ value: item.id, label: item.name }))}
-                onChange={async (ownerId) => { await api(`/companies/${detail.id}/owner`, { method: 'PATCH', json: { ownerId } }); message.success('已更新负责人'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
+                style={{ width: 220 }}
+                placeholder="指定负责商务"
+                options={staff.filter((item) => item.role === 'BD').map((item) => ({ value: item.id, label: item.name }))}
+                onChange={async (bdId) => { await api(`/companies/${detail.id}/bd`, { method: 'PATCH', json: { bdId } }); message.success('已更新负责商务'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
               />
-            </div>
+            </Space>
           ) : null}
           {user && ['OPS', 'FINANCE', 'ADMIN'].includes(user.role) ? <PolicyForm companyId={detail.id} /> : null}
         </Card>
@@ -126,7 +138,10 @@ function PolicyForm({ companyId }: { companyId: string }) {
 export function ReviewsPage() {
   const { id } = useParams();
   const nav = useNavigate();
+  const { user } = useAuth();
   const { message } = App.useApp();
+  const lead = user?.role === 'OPS_MANAGER' || user?.role === 'ADMIN';
+  const [ops, setOps] = useState<{ id: string; name: string }[]>([]);
   const [rows, setRows] = useState<Page<Plan> | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [status, setStatus] = useState<string>();
@@ -135,6 +150,10 @@ export function ReviewsPage() {
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [status]);
   useEffect(() => { if (id) api<Plan>(`/plans/${id}`).then(setPlan).catch((err) => setError(err.message)); }, [id]);
+  useEffect(() => {
+    if (!lead) return;
+    api<{ id: string; name: string; role: string }[]>('/admin/assignees').then((rows) => setOps(rows.filter((item) => item.role === 'OPS'))).catch(() => undefined);
+  }, [lead]);
 
   const refresh = async () => { if (id) setPlan(await api<Plan>(`/plans/${id}`)); load(); };
 
@@ -176,7 +195,15 @@ export function ReviewsPage() {
           <>
           <Space wrap>
             {['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button type="primary" onClick={async () => { await api(`/reviews/${plan.id}/open`, { method: 'POST' }); refresh(); }}>开始审核</Button> : null}
-            {plan.status === 'IN_REVIEW' ? <Button onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
+            {lead && ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'].includes(plan.status) ? (
+              <Select
+                style={{ width: 180 }}
+                placeholder="分派给运营"
+                options={ops.map((item) => ({ value: item.id, label: item.name }))}
+                onChange={async (assigneeId) => { try { await api(`/reviews/${plan.id}/assign`, { method: 'POST', json: { assigneeId } }); message.success('已分派'); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '没有分派'); } }}
+              />
+            ) : null}
+            {lead && plan.status === 'IN_REVIEW' ? <Button onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
             {plan.status === 'IN_REVIEW' ? <Button type="primary" onClick={async () => { try { await api(`/reviews/${plan.id}/finish`, { method: 'POST' }); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '还不能结束'); } }}>提交审核结果</Button> : null}
           </Space>
           {plan.rejectSummary ? <pre>{plan.rejectSummary}</pre> : null}
@@ -208,13 +235,13 @@ export function SharesPage() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { message } = App.useApp();
-  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER';
+  const canReviewShares = user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER';
   const [rows, setRows] = useState<Page<Plan> | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
   const [error, setError] = useState('');
-  const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status: finance && user?.role === 'FINANCE' ? 'SHARE_REVIEW' : undefined })}`).then(setRows).catch((err) => setError(err.message));
-  useEffect(() => { load(); }, [finance, user?.role]);
+  const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50 })}`).then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, []);
   useEffect(() => {
     if (!id) return;
     api<Plan>(`/plans/${id}`).then((row) => {
@@ -271,7 +298,7 @@ export function SharesPage() {
               } catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
             }}>提交分成</Button>
           ) : null}
-          {plan.status === 'SHARE_REVIEW' && finance ? (
+          {plan.status === 'SHARE_REVIEW' && canReviewShares ? (
             <Space>
               <Button type="primary" onClick={async () => { try { setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
               <Button danger onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
@@ -293,7 +320,9 @@ export function SharesPage() {
 }
 
 export function DailyPage() {
+  const { user } = useAuth();
   const { message } = App.useApp();
+  const lead = user?.role === 'OPS_MANAGER' || user?.role === 'ADMIN';
   const [rows, setRows] = useState<Page<any> | null>(null);
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [dramas, setDramas] = useState<any[]>([]);
@@ -310,7 +339,7 @@ export function DailyPage() {
 
   return (
     <div>
-      <PageHead title="每日数据" hint="手工录入。每个平台要哪一天的数，由平台配置决定。草稿可以先存，复核前需要关联防伪截图。录入人不能复核自己的记录。" />
+      <PageHead title="数据同步" hint="手工录入。每个平台要哪一天的数，由平台配置决定。草稿可以先存，复核前需要关联防伪截图。录入人不能复核自己的记录。问题行由运营主管上报。" />
       <ErrorNote error={error} />
       <Space wrap style={{ marginBottom: 12 }}>{expect.map((item) => <Tag key={item.id}>{item.name} · {item.asOfLabel}</Tag>)}</Space>
       <Form layout="vertical" style={{ maxWidth: 880 }} onFinish={async (values) => {
@@ -357,7 +386,12 @@ export function DailyPage() {
         { title: '净收入', dataIndex: 'netRevenue', render: (value, row) => value ? `${value} ${row.currency}` : '—' },
         { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
         { title: '提示', dataIndex: 'lagWarning' },
-        { title: '', render: (_, row) => <Space><Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/review`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有复核'); } }}>复核</Button><Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/lock`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有锁定'); } }}>锁定</Button></Space> },
+        { title: '', render: (_, row) => <Space>
+          <Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/review`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有复核'); } }}>复核</Button>
+          <Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/lock`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有锁定'); } }}>锁定</Button>
+          {lead && row.status !== 'LOCKED' ? <Button size="small" onClick={async () => { const note = window.prompt('问题说明') || ''; if (!note.trim()) return; try { await api(`/daily-stats/${row.id}/report`, { method: 'POST', json: { note } }); message.success('已上报问题行'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有上报'); } }}>上报问题行</Button> : null}
+          {lead && row.status !== 'LOCKED' ? <Button size="small" onClick={async () => { const reason = window.prompt('强制发布原因') || ''; if (!reason.trim()) return; try { await api(`/daily-stats/${row.id}/force-publish`, { method: 'POST', json: { reason } }); message.success('已强制发布'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有发布'); } }}>强制发布</Button> : null}
+        </Space> },
       ]} />
     </div>
   );
@@ -412,17 +446,18 @@ export function PlatformsPage() {
   const { message } = App.useApp();
   const [rows, setRows] = useState<any[]>([]);
   const admin = user?.role === 'ADMIN';
+  const canConfirmFirst = admin || user?.role === 'OPS_MANAGER';
   const load = () => api<any[]>('/platforms').then(setRows);
   useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="平台名单" hint="首发五家由管理员开关。数据日是昨天还是前天，也在这里配置。" />
+      <PageHead title="平台名单" hint="首发名单由运营主管或管理员确认。数据日是昨天还是前天，也在这里配置。" />
       <Table rowKey="id" dataSource={rows} pagination={false} columns={[
         { title: '平台', dataIndex: 'name' },
         { title: '地区', dataIndex: 'region' },
         { title: '数据日', dataIndex: 'syncLag', render: (value, row) => admin ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); load(); }} /> : labelOf(value) },
-        { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={!admin && user?.role !== 'OPS' && user?.role !== 'BD'} onChange={async (enabled) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
-        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Switch checked={value} disabled={!admin} onChange={async (firstBatch) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+        { title: '启用', dataIndex: 'enabled', render: (value, row) => <Switch checked={value} disabled={Boolean(row.firstBatch) && !canConfirmFirst} onChange={async (enabled) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { enabled } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
+        { title: '首发', dataIndex: 'firstBatch', render: (value, row) => <Switch checked={value} disabled={!canConfirmFirst} onChange={async (firstBatch) => { try { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { firstBatch } }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有改成'); } }} /> },
       ]} />
       <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => { await api('/platforms', { method: 'POST', json: values }); message.success('已添加'); load(); }}>
         <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="新平台名称" /></Form.Item>
@@ -441,7 +476,7 @@ export function UsersPage() {
   useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="员工账号" hint="客户从注册进入，这里只建运营、商务、财务和管理员。" />
+      <PageHead title="员工账号" hint="客户从注册进入，这里只建运营、主管、商务、财务和管理员。" />
       <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
         { title: '姓名', dataIndex: 'name' },
         { title: '邮箱', dataIndex: 'email' },
@@ -452,7 +487,7 @@ export function UsersPage() {
         <Form.Item name="name" rules={[{ required: true }]}><Input placeholder="姓名" /></Form.Item>
         <Form.Item name="email" rules={[{ required: true }]}><Input placeholder="邮箱" /></Form.Item>
         <Form.Item name="password" rules={[{ required: true, min: 8 }]}><Input.Password placeholder="密码" /></Form.Item>
-        <Form.Item name="role" initialValue="OPS"><Select options={['OPS', 'BD', 'FINANCE', 'ADMIN'].map((value) => ({ value, label: labelOf(value) }))} /></Form.Item>
+        <Form.Item name="role" initialValue="OPS"><Select options={['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'].map((value) => ({ value, label: labelOf(value) }))} /></Form.Item>
         <Button htmlType="submit" type="primary">创建</Button>
       </Form>
     </div>
@@ -508,6 +543,36 @@ export function TasksPage() {
         { title: '状态', dataIndex: 'status' },
         { title: '成功', dataIndex: 'succeeded' },
       ]} />
+    </div>
+  );
+}
+
+export function RatesPage() {
+  const { message } = App.useApp();
+  const [rows, setRows] = useState<any[]>([]);
+  const [error, setError] = useState('');
+  const load = () => api<any[]>('/rates').then(setRows).catch((err) => setError(err.message));
+  useEffect(() => { load(); }, []);
+  return (
+    <div>
+      <PageHead title="汇率" hint="结算参考汇率。录入后按日期取不晚于结算日的那一档。" />
+      <ErrorNote error={error} />
+      <Table rowKey="id" dataSource={rows} pagination={false} columns={[
+        { title: '货币对', dataIndex: 'pair' },
+        { title: '日期', dataIndex: 'rateDate', render: dayText },
+        { title: '汇率', dataIndex: 'value' },
+        { title: '来源', dataIndex: 'source' },
+      ]} />
+      <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => {
+        try { await api('/rates', { method: 'POST', json: values }); message.success('已录入汇率'); load(); }
+        catch (err) { message.error(err instanceof Error ? err.message : '没有保存'); }
+      }}>
+        <Form.Item name="pair" initialValue="USD->CNY" rules={[{ required: true }]}><Input placeholder="USD->CNY" /></Form.Item>
+        <Form.Item name="rateDate" rules={[{ required: true }]}><Input placeholder="日期 YYYY-MM-DD" /></Form.Item>
+        <Form.Item name="value" rules={[{ required: true }]}><Input placeholder="汇率" /></Form.Item>
+        <Form.Item name="source" rules={[{ required: true }]}><Input placeholder="来源" /></Form.Item>
+        <Button type="primary" htmlType="submit">录入</Button>
+      </Form>
     </div>
   );
 }

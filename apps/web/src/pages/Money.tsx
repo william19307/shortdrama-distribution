@@ -177,7 +177,7 @@ export function SettlementsPage() {
             { title: '剧', dataIndex: ['drama', 'title'] },
             { title: '平台', dataIndex: 'platformName', render: (value: string) => <PlatformChip name={value} /> },
             { title: '原币', render: (_: unknown, row: NonNullable<Settlement['lines']>[number]) => `${row.originalAmount ?? '—'} ${row.currency}` },
-            amountColumn<NonNullable<Settlement['lines']>[number]>({ title: '参考人民币', dataIndex: 'referenceCny', currency: '¥' }),
+            ...(client ? [] : [amountColumn<NonNullable<Settlement['lines']>[number]>({ title: '参考人民币', dataIndex: 'referenceCny', currency: '¥' })]),
           ]} />
           {!client && (detail.status === 'PENDING_ENTRY' || detail.status === 'PENDING_REVIEW') ? (
             <Form layout="vertical" style={{ maxWidth: 520, marginTop: 16 }} onFinish={async (values) => {

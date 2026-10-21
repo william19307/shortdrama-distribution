@@ -45,6 +45,11 @@ export class CompanyController {
     return this.companies.setOwner(user, id, body);
   }
 
+  @Patch('companies/:id/bd')
+  bd(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(z.object({ bdId: z.string().nullable() }))) body: { bdId: string | null }) {
+    return this.companies.setBd(user, id, body.bdId);
+  }
+
   @Get('bank-accounts')
   banks(@CurrentUser() user: AuthUser) {
     return this.companies.listBanks(user);

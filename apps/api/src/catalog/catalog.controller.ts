@@ -60,9 +60,24 @@ export class CatalogController {
     return this.catalog.putContent(user, id, Buffer.isBuffer(body) ? body : Buffer.alloc(0));
   }
 
+  @Put('storage/uploads/:id/parts/:partNumber')
+  putPart(@CurrentUser() user: AuthUser, @Param('id') id: string, @Param('partNumber') partNumber: string, @Req() req: Request) {
+    const body = req.body as Buffer;
+    return this.catalog.putPart(user, id, Number(partNumber), Buffer.isBuffer(body) ? body : Buffer.alloc(0));
+  }
+
   @Post('storage/uploads/:id/complete')
   complete(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(uploadCompleteSchema)) body: z.infer<typeof uploadCompleteSchema>) {
     return this.catalog.complete(user, id, body.parts);
+  }
+
+  @Post('assets/:id/review')
+  reviewAsset(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Body(new ZodPipe(z.object({ pass: z.boolean(), reason: z.string().max(500).optional() }))) body: { pass: boolean; reason?: string },
+  ) {
+    return this.catalog.reviewAsset(user, id, body);
   }
 
   @Get('storage/sign')

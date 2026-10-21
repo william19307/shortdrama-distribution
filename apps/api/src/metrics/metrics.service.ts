@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   clientPhaseFromPlans,
@@ -11,6 +11,7 @@ import {
 } from '@shortform/shared';
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
+import { hidesCommercialTerms, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
@@ -52,13 +53,18 @@ export class MetricsService {
       }),
       this.prisma.dailyStat.count({ where }),
     ]);
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return {
+      items: hidesCommercialTerms(user.role) ? items.map((item) => stripCommercialKeys(item as unknown as Record<string, unknown>)) : items,
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   async saveDaily(user: AuthUser, input: z.infer<typeof dailyStatSchema>) {
-    assertRole(user, ['OPS', 'ADMIN', 'BD']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN', 'BD']);
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }), '剧目不存在');
-    if (user.role === 'OPS') assertCompanyAccess(user, drama.company);
+    if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }), '平台不存在');
     const expected = expectedStatDate(platform.syncLag);
     const lagWarning = input.statDate === expected ? null : `平台口径是 ${platform.syncLag}，期望录入 ${expected} 的数据`;
@@ -107,21 +113,52 @@ export class MetricsService {
     const saved = existing
       ? await this.prisma.dailyStat.update({
           where: { id: existing.id },
-          data: { ...data, enteredById: existing.enteredById, version: { increment: 1 }, reviewedById: null, reviewedAt: null, lockedAt: null },
+          data: { ...data, enteredById: user.id, version: { increment: 1 }, reviewedById: null, reviewedAt: null, lockedAt: null },
         })
       : await this.prisma.dailyStat.create({ data });
     await this.audit.write(user.id, existing ? 'daily.update' : 'daily.create', 'DailyStat', saved.id, { recordId, before: existing?.views, after: input.views });
     return saved;
   }
 
+  async reportDaily(user: AuthUser, id: string, note: string) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '问题行上报由运营主管处理');
+    const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }), '日报不存在');
+    if (row.status === 'LOCKED') throw new BadRequestException('已锁定的数据不能上报');
+    const text = note.trim();
+    if (!text) throw new BadRequestException('请填写问题说明');
+    const updated = await this.prisma.dailyStat.update({
+      where: { id },
+      data: { status: 'ANOMALY', anomalyNote: text },
+    });
+    await this.audit.write(user.id, 'daily.report', 'DailyStat', id, { note: text });
+    return updated;
+  }
+
+  async forcePublish(user: AuthUser, id: string, reason: string) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '强制发布由运营主管处理');
+    const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }), '日报不存在');
+    if (row.status === 'LOCKED') throw new BadRequestException('已锁定的数据不能强制发布');
+    const updated = await this.prisma.dailyStat.update({
+      where: { id },
+      data: { status: 'REVIEWED', reviewedById: user.id, reviewedAt: new Date(), anomalyNote: reason },
+    });
+    await this.audit.write(user.id, 'daily.force_publish', 'DailyStat', id, { reason, from: row.status });
+    return updated;
+  }
+
   async reviewDaily(user: AuthUser, id: string) {
-    assertRole(user, ['OPS', 'FINANCE', 'ADMIN']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id }, include: { company: true } }));
     if (user.role === 'OPS') assertCompanyAccess(user, row.company);
     if (row.enteredById === user.id) throw new ForbiddenException('不能复核自己录入的数据');
     if (!row.evidenceSha256) throw new BadRequestException('请先关联带哈希的防伪截图，再复核');
     if (row.status === 'LOCKED') throw new BadRequestException('已锁定');
-    return this.prisma.dailyStat.update({ where: { id }, data: { status: 'REVIEWED', reviewedById: user.id, reviewedAt: new Date() } });
+    const reviewed = await this.prisma.dailyStat.updateMany({
+      where: { id, status: { in: ['DRAFT', 'REVIEWED', 'ANOMALY'] }, NOT: { enteredById: user.id } },
+      data: { status: 'REVIEWED', reviewedById: user.id, reviewedAt: new Date() },
+    });
+    if (reviewed.count !== 1) throw new ConflictException('日报已被修改，请刷新后再复核');
+    return this.prisma.dailyStat.findUnique({ where: { id } });
   }
 
   async lockDaily(user: AuthUser, id: string) {
@@ -129,11 +166,16 @@ export class MetricsService {
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }));
     if (row.status !== 'REVIEWED') throw new BadRequestException('复核通过后才能锁定');
     if (row.enteredById === user.id) throw new ForbiddenException('录入人不能锁定');
-    return this.prisma.dailyStat.update({ where: { id }, data: { status: 'LOCKED', lockedAt: new Date() } });
+    const locked = await this.prisma.dailyStat.updateMany({
+      where: { id, status: 'REVIEWED', NOT: { enteredById: user.id } },
+      data: { status: 'LOCKED', lockedAt: new Date() },
+    });
+    if (locked.count !== 1) throw new ConflictException('日报已被修改，请刷新后再锁定');
+    return this.prisma.dailyStat.findUnique({ where: { id } });
   }
 
   async createWatermark(user: AuthUser, input: z.infer<typeof watermarkCreateSchema>) {
-    assertRole(user, ['OPS', 'BD', 'ADMIN']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
     let original: Buffer;
     try {
       original = await this.storage.getObject(input.fileKey);
@@ -158,7 +200,7 @@ export class MetricsService {
       if (!platform) fail = fail || '文件名里的平台无法识别';
     }
     if (!shotDate && parsed?.date) shotDate = parsed.date;
-    if (drama && user.role === 'OPS') assertCompanyAccess(user, drama.company);
+    if (drama && (user.role === 'OPS' || user.role === 'BD')) assertCompanyAccess(user, drama.company);
     if (!drama || !platform || !shotDate) fail = fail || '缺少剧目、平台或日期，进入待归档';
     const when = shanghaiStamp();
     const text = `${platform?.name || parsed?.platformCode || '平台'} | ${drama?.title || parsed?.dramaToken || '剧目'} | ${user.name} | ${when} | 原图 ${originalSha.slice(0, 12)}`;
@@ -197,11 +239,11 @@ export class MetricsService {
   }
 
   async assignWatermark(user: AuthUser, id: string, input: z.infer<typeof watermarkAssignSchema>) {
-    assertRole(user, ['OPS', 'BD', 'ADMIN']);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
     const shot = assertFound(await this.prisma.watermarkShot.findUnique({ where: { id } }));
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }));
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }));
-    if (user.role === 'OPS') assertCompanyAccess(user, drama.company);
+    if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
     const updated = await this.prisma.watermarkShot.update({
       where: { id },
       data: { companyId: drama.companyId, dramaId: drama.id, platformId: platform.id, shotDate: day(input.shotDate), status: 'ARCHIVED', failReason: null },
@@ -217,6 +259,7 @@ export class MetricsService {
       where.companyId = user.companyId!;
       where.status = 'ARCHIVED';
     } else if (user.role === 'OPS') where.OR = [{ company: { ownerId: user.id } }, { status: 'PENDING_MATCH', operatorId: user.id }];
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     const items = await this.prisma.watermarkShot.findMany({
       where,
       include: { drama: { select: { title: true, code: true } }, platform: { select: { name: true } } },
@@ -236,6 +279,7 @@ export class MetricsService {
     const where: Prisma.DailyStatWhereInput = { status: { in: ['REVIEWED', 'LOCKED'] } };
     if (user.role === 'CLIENT') where.companyId = user.companyId!;
     else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     const grouped = await this.prisma.dailyStat.groupBy({
       by: ['statDate', 'currency'],
       where,
@@ -280,13 +324,21 @@ export class MetricsService {
     });
     const dramas = await this.prisma.drama.findMany({ where: { id: { in: topRaw.map((row) => row.dramaId) } }, select: { id: true, title: true, code: true } });
     const top = topRaw.map((row) => ({ dramaId: row.dramaId, title: dramas.find((drama) => drama.id === row.dramaId)?.title || row.dramaId, views: row._sum.views ?? 0 }));
-    const live = await this.prisma.distributionPlan.count({ where: { status: 'LIVE', ...(user.role === 'CLIENT' ? { companyId: user.companyId! } : user.role === 'OPS' ? { company: { ownerId: user.id } } : {}) } });
+    const scope = user.role === 'CLIENT' ? { companyId: user.companyId! } : user.role === 'OPS' ? { company: { ownerId: user.id } } : user.role === 'BD' ? { company: { bdId: user.id } } : {};
+    const live = await this.prisma.distributionPlan.count({ where: { status: 'LIVE', ...scope } });
     const platforms = await this.prisma.planPlatform.findMany({
-      where: { listingStatus: 'LISTED', plan: user.role === 'CLIENT' ? { companyId: user.companyId! } : user.role === 'OPS' ? { company: { ownerId: user.id } } : {} },
+      where: { listingStatus: 'LISTED', plan: scope },
       distinct: ['platformId'],
       select: { platformName: true },
     });
     const latest = trend.length ? trend[trend.length - 1].date : null;
+    const yesterday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const yesterdayDate = new Date(`${yesterday}T00:00:00.000Z`);
+    const [pendingSync, reviewedSync] = await Promise.all([
+      this.prisma.dailyStat.count({ where: { ...scope, statDate: yesterdayDate, status: { in: ['DRAFT', 'ANOMALY'] } } }),
+      this.prisma.dailyStat.count({ where: { ...scope, statDate: yesterdayDate, status: { in: ['REVIEWED', 'LOCKED'] } } }),
+    ]);
+    const updating = user.role === 'CLIENT' && (pendingSync > 0 || reviewedSync === 0);
     const lead = top[0];
     const conclusion = !trend.length
       ? '还没有已复核的播放数据。数据录入并复核后，这里会告诉你哪部剧在涨。'
@@ -303,6 +355,8 @@ export class MetricsService {
       delta,
       trend,
       top,
+      updating,
+      updatingLabel: updating ? '数据更新中' : '',
     };
   }
 
@@ -310,6 +364,7 @@ export class MetricsService {
     const where: Prisma.TicketWhereInput = {};
     if (user.role === 'CLIENT') where.companyId = user.companyId!;
     else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     if (query.type) where.type = query.type as never;
     if (query.status) where.status = query.status as never;
     const [items, total] = await Promise.all([
@@ -332,7 +387,7 @@ export class MetricsService {
         include: { messages: { orderBy: { createdAt: 'asc' } }, shots: true, company: true, drama: { select: { title: true } } },
       }),
     );
-    if (user.role === 'CLIENT' || user.role === 'OPS') assertCompanyAccess(user, ticket.company);
+    if (user.role === 'CLIENT' || user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, ticket.company);
     const shots = await Promise.all(ticket.shots.map(async (shot) => ({ ...shot, url: shot.watermarkedKey ? await this.storage.presignGet(shot.watermarkedKey).catch(() => null) : null, originalKey: user.role === 'CLIENT' ? undefined : shot.originalKey })));
     return { ...ticket, shots };
   }
@@ -359,6 +414,7 @@ export class MetricsService {
       where.companyId = user.companyId!;
       where.status = { in: ['REVIEWED', 'LOCKED'] };
     } else if (user.role === 'OPS') where.company = { ownerId: user.id };
+    else if (user.role === 'BD') where.company = { bdId: user.id };
     if (query.companyId && user.role !== 'CLIENT') where.companyId = query.companyId;
     if (query.platformId) where.platformId = query.platformId;
     if (query.dramaId) where.dramaId = query.dramaId;
