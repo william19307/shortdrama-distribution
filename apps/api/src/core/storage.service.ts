@@ -123,22 +123,28 @@ export class S3StorageService extends StorageService {
       await this.client.send(new CreateBucketCommand({ Bucket: this.bucket }));
       this.logger.log(`已创建存储桶 ${this.bucket}`);
     }
-    await this.client.send(
-      new PutBucketCorsCommand({
-        Bucket: this.bucket,
-        CORSConfiguration: {
-          CORSRules: [
-            {
-              AllowedOrigins: ['*'],
-              AllowedMethods: ['GET', 'PUT', 'POST', 'HEAD'],
-              AllowedHeaders: ['*'],
-              ExposeHeaders: ['ETag'],
-              MaxAgeSeconds: 3600,
-            },
-          ],
-        },
-      }),
-    );
+    try {
+      await this.client.send(
+        new PutBucketCorsCommand({
+          Bucket: this.bucket,
+          CORSConfiguration: {
+            CORSRules: [
+              {
+                AllowedOrigins: ['*'],
+                AllowedMethods: ['GET', 'PUT', 'POST', 'HEAD'],
+                AllowedHeaders: ['*'],
+                ExposeHeaders: ['ETag'],
+                MaxAgeSeconds: 3600,
+              },
+            ],
+          },
+        }),
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (!message.toLowerCase().includes('not implemented')) throw error;
+      this.logger.warn('当前对象存储不支持设置桶 CORS。浏览器直传需要存储端允许来源，否则把 UPLOAD_VIA_API 设为 true。');
+    }
   }
 
   async presignPut(key: string, contentType: string) {

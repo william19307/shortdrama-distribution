@@ -22,6 +22,8 @@ services:
     environment:
       MINIO_ROOT_USER: minio
       MINIO_ROOT_PASSWORD: minio123456
+      # 这套 MinIO 的桶 CORS 接口返回未实现。全局允许来源后，浏览器才能直传。
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
     ports:
       - "9000:9000"
       - "9001:9001"
