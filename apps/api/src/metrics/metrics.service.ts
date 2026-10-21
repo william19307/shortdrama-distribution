@@ -207,46 +207,45 @@ export class MetricsService {
       throw new BadRequestException(message === '不支持超大压缩包' || message === '不是有效的 zip' ? message : '不是有效的 zip');
     }
     if (!entries.length) throw new BadRequestException('压缩包里没有文件');
-    const fallbackCompanyId = await this.soleCompanyId(user);
-    const items: { filename: string; ok: boolean; status?: string; id?: string; ticketCode?: string; error?: string }[] = [];
+    const batchNo = await this.prisma.$transaction((tx) => nextCode(tx, 'PC', 5));
+    const items: { filename: string; ok: boolean; result: 'archived' | 'pending' | 'failed'; status?: string; id?: string; ticketCode?: string; batchNo?: string; error?: string }[] = [];
     for (const entry of entries) {
       if (entry.error || !entry.data) {
-        items.push({ filename: entry.name, ok: false, error: entry.error || '这张图解压失败' });
+        items.push({ filename: entry.name, ok: false, result: 'failed', error: entry.error || '这张图解压失败' });
         continue;
       }
       if (!/\.(png|jpe?g|webp)$/i.test(entry.name)) {
-        items.push({ filename: entry.name, ok: false, error: '只接受 png、jpg、webp' });
+        items.push({ filename: entry.name, ok: false, result: 'failed', error: '只接受 png、jpg、webp' });
         continue;
       }
       try {
         const shot = await this.persistWatermark(user, entry.data, {
           filename: entry.name,
-          unmatchedCompanyId: fallbackCompanyId,
           storeOriginal: true,
+          poolUnassigned: true,
+          batchNo,
         });
+        const pending = shot.status !== 'ARCHIVED';
         items.push({
           filename: entry.name,
           ok: true,
+          result: pending ? 'pending' : 'archived',
           status: shot.status,
           id: shot.id,
           ticketCode: shot.ticketCode || undefined,
+          batchNo: shot.batchNo || undefined,
         });
       } catch (err) {
         const error = err instanceof HttpException ? err.message : '这张图无法加水印，请上传 png 或 jpg';
-        items.push({ filename: entry.name, ok: false, error });
+        items.push({ filename: entry.name, ok: false, result: 'failed', error });
       }
     }
-    const succeeded = items.filter((item) => item.ok).length;
-    const archived = items.filter((item) => item.ok && item.status === 'ARCHIVED').length;
-    const failed = items.length - succeeded;
-    await this.audit.write(user.id, 'evidence.upload', 'WatermarkShot', items.find((item) => item.id)?.id || 'zip', { succeeded, archived, failed });
-    return { succeeded, archived, failed, items };
-  }
-
-  private async soleCompanyId(user: AuthUser) {
-    const where: Prisma.CompanyWhereInput = user.role === 'OPS' ? { ownerId: user.id } : user.role === 'BD' ? { bdId: user.id } : {};
-    const rows = await this.prisma.company.findMany({ where, select: { id: true }, take: 2 });
-    return rows.length === 1 ? rows[0].id : null;
+    const archived = items.filter((item) => item.result === 'archived').length;
+    const pending = items.filter((item) => item.result === 'pending').length;
+    const failed = items.filter((item) => item.result === 'failed').length;
+    const succeeded = archived + pending;
+    await this.audit.write(user.id, 'evidence.upload', 'WatermarkShot', items.find((item) => item.id)?.id || batchNo, { batchNo, succeeded, archived, pending, failed });
+    return { batchNo, succeeded, archived, pending, failed, items };
   }
 
   private async persistWatermark(
@@ -259,8 +258,9 @@ export class MetricsService {
       platformId?: string;
       shotDate?: string | null;
       kind?: 'LISTING' | 'DATA' | 'DELIST';
-      unmatchedCompanyId?: string | null;
       storeOriginal?: boolean;
+      poolUnassigned?: boolean;
+      batchNo?: string;
     },
   ) {
     await this.assertImage(original);
@@ -284,27 +284,27 @@ export class MetricsService {
     if (!shotDate && parsed?.date) shotDate = parsed.date;
     if (drama && (user.role === 'OPS' || user.role === 'BD')) assertCompanyAccess(user, drama.company);
     if (!drama || !platform || !shotDate) fail = fail || '缺少剧目、平台或日期，进入待归档';
-    const companyForKey = drama?.companyId || (input.unmatchedCompanyId !== undefined ? input.unmatchedCompanyId : input.fileKey?.split('/')[0]);
-    if (!companyForKey) throw new BadRequestException('没有匹配到剧目，也没有可归属的客户');
+    const storageRoot = drama?.companyId || (input.poolUnassigned && input.batchNo ? `pending/${input.batchNo}` : input.fileKey?.split('/')[0]);
+    if (!storageRoot) throw new BadRequestException('没有匹配到剧目，也没有可归属的客户');
     const matched = !fail && drama && platform && shotDate ? { drama, platform, shotDate } : null;
     const ticket = matched
       ? await this.ensureTicket(matched.drama.companyId, matched.drama.id, matched.drama.title, matched.platform.name, matched.shotDate, user.id)
       : null;
     const stamped = await this.stampShot(original, originalSha, platform?.name || parsed?.platformCode || '平台', drama?.title || parsed?.dramaToken || '剧目', user.name, ticket?.code || '');
     const sha256 = createHash('sha256').update(stamped.bytes).digest('hex');
-    const key = `${companyForKey}/watermark/${sha256.slice(0, 16)}.png`;
+    const key = `${storageRoot}/watermark/${sha256.slice(0, 16)}.png`;
     await this.storage.putObject(key, stamped.bytes, 'image/png');
     let originalKey = input.fileKey || '';
     if (input.storeOriginal) {
       const lower = (input.filename || '').toLowerCase();
       const ext = lower.endsWith('.webp') ? '.webp' : lower.endsWith('.png') ? '.png' : '.jpg';
       const contentType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-      originalKey = `${companyForKey}/watermark-src/${originalSha.slice(0, 16)}${ext}`;
+      originalKey = `${storageRoot}/watermark-src/${originalSha.slice(0, 16)}${ext}`;
       await this.storage.putObject(originalKey, original, contentType);
     }
     const shot = await this.prisma.watermarkShot.create({
       data: {
-        companyId: drama?.companyId || input.unmatchedCompanyId || undefined,
+        companyId: drama?.companyId,
         dramaId: drama?.id,
         platformId: platform?.id,
         shotDate: shotDate ? day(shotDate) : null,
@@ -317,6 +317,7 @@ export class MetricsService {
         status: fail ? 'PENDING_MATCH' : 'ARCHIVED',
         failReason: fail,
         operatorId: user.id,
+        batchNo: input.batchNo || '',
         ticketId: ticket?.id,
         ticketCode: ticket?.code || '',
       },
@@ -342,7 +343,10 @@ export class MetricsService {
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }));
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }));
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
-    const ticket = await this.ensureTicket(drama.companyId, drama.id, drama.title, platform.name, input.shotDate, user.id);
+    const ticketCode = input.ticketCode?.trim();
+    const ticket = ticketCode
+      ? await this.useTicket(ticketCode, drama.companyId, drama.id, drama.title, platform.name)
+      : await this.ensureTicket(drama.companyId, drama.id, drama.title, platform.name, input.shotDate, user.id);
     const data: Prisma.WatermarkShotUpdateInput = {
       company: { connect: { id: drama.companyId } },
       drama: { connect: { id: drama.id } },
@@ -398,19 +402,28 @@ export class MetricsService {
       where.companyId = user.companyId!;
       where.status = 'ARCHIVED';
     } else if (user.role === 'OPS') where.OR = [{ company: { ownerId: user.id } }, { status: 'PENDING_MATCH', operatorId: user.id }];
-    else if (user.role === 'BD') where.company = { bdId: user.id };
+    else if (user.role === 'BD') where.OR = [{ company: { bdId: user.id } }, { status: 'PENDING_MATCH', operatorId: user.id }];
     const items = await this.prisma.watermarkShot.findMany({
       where,
       include: { drama: { select: { title: true, code: true } }, platform: { select: { name: true } } },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
+    const operators = await this.prisma.user.findMany({
+      where: { id: { in: [...new Set(items.map((item) => item.operatorId))] } },
+      select: { id: true, name: true },
+    });
+    const operatorName = new Map(operators.map((item) => [item.id, item.name]));
     return Promise.all(
-      items.map(async (item) => ({
-        ...item,
-        url: item.watermarkedKey ? await this.storage.presignGet(item.watermarkedKey).catch(() => null) : null,
-        originalUrl: user.role === 'CLIENT' ? null : await this.storage.presignGet(item.originalKey).catch(() => null),
-      })),
+      items.map(async (item) => {
+        const { originalKey, ...rest } = item;
+        return {
+          ...(user.role === 'CLIENT' ? rest : item),
+          operatorName: operatorName.get(item.operatorId) || '',
+          url: item.watermarkedKey ? await this.storage.presignGet(item.watermarkedKey).catch(() => null) : null,
+          originalUrl: user.role === 'CLIENT' ? null : await this.storage.presignGet(originalKey).catch(() => null),
+        };
+      }),
     );
   }
 
@@ -571,6 +584,16 @@ export class MetricsService {
     } catch {
       throw new BadRequestException('这张图无法加水印，请上传 png 或 jpg');
     }
+  }
+
+  private async useTicket(code: string, companyId: string, dramaId: string, title: string, platformName: string) {
+    const ticket = await this.prisma.ticket.findUnique({ where: { code } });
+    if (!ticket) throw new BadRequestException('工单不存在');
+    if (ticket.companyId !== companyId) throw new BadRequestException('工单不属于该客户');
+    return this.prisma.ticket.update({
+      where: { id: ticket.id },
+      data: { body: `${ticket.body}\n${platformName} · 《${title}》`, dramaId: ticket.dramaId ?? dramaId },
+    });
   }
 
   private async ensureTicket(companyId: string, dramaId: string, title: string, platformName: string, shotDate: string, actorId: string) {

@@ -118,6 +118,10 @@ describe('水印工单号、截图打包和未完成分片', () => {
     expect(String(shot.body.url)).not.toContain('minio:9000');
     const listed = await http.get('/api/watermarks');
     expect(listed.body.some((item: { ticketCode: string }) => item.ticketCode === shot.body.ticketCode)).toBe(true);
+    const clientRows = await authed(client).get('/api/watermarks');
+    expect(clientRows.status).toBeLessThan(300);
+    expect(clientRows.body.length).toBeGreaterThan(0);
+    for (const row of clientRows.body) expect(row).not.toHaveProperty('originalKey');
     const denied = await authed(client).post('/api/evidence/archive-zip').send({ fileKeys: [shot.body.watermarkedKey] });
     expect(denied.status).toBe(403);
     const zip = await http.post('/api/evidence/archive-zip').send({ fileKeys: [shot.body.watermarkedKey, done.body.key] }).buffer(true).parse(binaryParser);
@@ -134,7 +138,9 @@ describe('水印工单号、截图打包和未完成分片', () => {
     const matchedName = `${platform?.code}_${drama?.code}_20261003_DATA_1.png`;
     const stored = zipStore([
       { name: matchedName, data: PNG },
+      { name: 'nomatch.png', data: PNG },
       { name: 'note.txt', data: Buffer.from('not an image') },
+      { name: 'bad.png', data: Buffer.from('not a png') },
     ]);
     const denied = await authed(client).post('/api/evidence/upload-zip').attach('file', stored, 'shots.zip');
     expect(denied.status).toBe(403);
@@ -142,16 +148,40 @@ describe('水印工单号、截图打包和未完成分片', () => {
     expect(bad.status).toBe(400);
     const uploaded = await http.post('/api/evidence/upload-zip').attach('file', stored, 'shots.zip');
     expect(uploaded.status).toBeLessThan(300);
-    expect(uploaded.body.succeeded).toBe(1);
+    expect(uploaded.body.batchNo).toMatch(/^PC/);
+    expect(uploaded.body.succeeded).toBe(2);
     expect(uploaded.body.archived).toBe(1);
-    expect(uploaded.body.failed).toBe(1);
-    expect(uploaded.body.items[0].ok).toBe(true);
-    expect(uploaded.body.items[0].status).toBe('ARCHIVED');
+    expect(uploaded.body.pending).toBe(1);
+    expect(uploaded.body.failed).toBe(2);
+    expect(uploaded.body.items[0].result).toBe('archived');
     expect(uploaded.body.items[0].ticketCode).toMatch(/^GD/);
-    expect(uploaded.body.items[1].ok).toBe(false);
-    expect(String(uploaded.body.items[1].error)).toMatch(/png|jpg/);
+    expect(uploaded.body.items[1].result).toBe('pending');
+    expect(uploaded.body.items[1].batchNo).toBe(uploaded.body.batchNo);
+    expect(uploaded.body.items[2].result).toBe('failed');
+    expect(String(uploaded.body.items[2].error)).toMatch(/png|jpg/);
+    expect(uploaded.body.items[3].result).toBe('failed');
     const listed = await http.get('/api/watermarks');
-    expect(listed.body.some((item: { ticketCode: string }) => item.ticketCode === uploaded.body.items[0].ticketCode)).toBe(true);
+    const pending = listed.body.find((item: { id: string }) => item.id === uploaded.body.items[1].id);
+    expect(pending.status).toBe('PENDING_MATCH');
+    expect(pending.companyId).toBeNull();
+    expect(pending.batchNo).toBe(uploaded.body.batchNo);
+    expect(pending.operatorId).toBeTruthy();
+    expect(String(pending.originalKey)).toContain(`pending/${uploaded.body.batchNo}/`);
+    const missingTicket = await http.post(`/api/watermarks/${pending.id}/assign`).send({ dramaId, platformId, shotDate: '2026-10-05', ticketCode: 'NOPE' });
+    expect(missingTicket.status).toBe(400);
+    const assigned = await http.post(`/api/watermarks/${pending.id}/assign`).send({ dramaId, platformId, shotDate: '2026-10-05' });
+    expect(assigned.status).toBeLessThan(300);
+    expect(assigned.body.status).toBe('ARCHIVED');
+    expect(assigned.body.ticketCode).toMatch(/^GD/);
+    expect(assigned.body.companyId).toBe(companyId);
+    const again = zipStore([{ name: 'another.png', data: PNG }]);
+    const secondPending = await http.post('/api/evidence/upload-zip').attach('file', again, 'again.zip');
+    expect(secondPending.body.pending).toBe(1);
+    expect(secondPending.body.failed).toBe(0);
+    const linked = await http.post(`/api/watermarks/${secondPending.body.items[0].id}/assign`).send({ dramaId, platformId, shotDate: '2026-10-05', ticketCode: assigned.body.ticketCode });
+    expect(linked.status).toBeLessThan(300);
+    expect(linked.body.ticketCode).toBe(assigned.body.ticketCode);
+    expect(linked.body.status).toBe('ARCHIVED');
     const deflated = zipDeflate(`${platform?.code}_${drama?.code}_20261004_DATA_2.png`, PNG);
     const second = await http.post('/api/evidence/upload-zip').attach('file', deflated, 'deflate.zip');
     expect(second.status).toBeLessThan(300);

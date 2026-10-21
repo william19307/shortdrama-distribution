@@ -264,6 +264,7 @@ export const watermarkAssignSchema = z.object({
   dramaId: z.string().min(1),
   platformId: z.string().min(1),
   shotDate: dateStr,
+  ticketCode: z.string().trim().max(40).optional(),
 });
 
 export const contractCreateSchema = z.object({

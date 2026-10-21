@@ -574,6 +574,7 @@ model WatermarkShot {
   status         WatermarkStatus @default(PENDING_MATCH)
   failReason     String?
   operatorId     String
+  batchNo        String          @default("")
   ticketId       String?
   ticketCode     String          @default("")
   ticket         Ticket?         @relation(fields: [ticketId], references: [id])
@@ -582,6 +583,7 @@ model WatermarkShot {
   @@index([dramaId, shotDate])
   @@index([status])
   @@index([companyId, shotDate])
+  @@index([batchNo])
 }
 
 model Ticket {

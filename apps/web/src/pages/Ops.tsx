@@ -590,23 +590,23 @@ export function WatermarksPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [dramas, setDramas] = useState<any[]>([]);
-  const [form, setForm] = useState({ dramaId: '', platformId: '', shotDate: '', kind: 'DATA', filename: '' });
+  const [form, setForm] = useState({ dramaId: '', platformId: '', shotDate: '', kind: 'DATA', filename: '', ticketCode: '' });
   const [picked, setPicked] = useState<string[]>([]);
   const [error, setError] = useState('');
-  const [zipResult, setZipResult] = useState<{ succeeded: number; archived: number; failed: number; items: { filename: string; ok: boolean; status?: string; ticketCode?: string; error?: string }[] } | null>(null);
+  const [zipResult, setZipResult] = useState<{ batchNo?: string; succeeded: number; archived: number; pending: number; failed: number; items: { filename: string; ok: boolean; result?: string; status?: string; ticketCode?: string; batchNo?: string; error?: string }[] } | null>(null);
   const load = () => api<any[]>('/watermarks').then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); api<any[]>('/platforms').then(setPlatforms); api<Page<any>>('/dramas?page=1&pageSize=100').then((res) => setDramas(res.items)); }, []);
 
   return (
     <div>
-      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人、上海时间和工单号。成功匹配的截图并进当天的工单。可以上传 zip 批量归档，也可以勾选后打包下载。" extra={<Space>
+      <PageHead title="防伪截图" hint="上传后会铺上暗纹，并在底栏写上平台、剧名、操作人、上海时间和工单号。对得上剧目的截图自动归档。对不上的进入待归档，指定剧目、平台和工单后再归档。也可以勾选后打包下载。" extra={<Space>
         <Upload accept=".zip,application/zip" showUploadList={false} beforeUpload={async (file) => {
           try {
             const body = new FormData();
             body.append('file', file);
-            const result = await api<{ succeeded: number; archived: number; failed: number; items: { filename: string; ok: boolean; status?: string; ticketCode?: string; error?: string }[] }>('/evidence/upload-zip', { method: 'POST', body });
+            const result = await api<{ batchNo: string; succeeded: number; archived: number; pending: number; failed: number; items: { filename: string; ok: boolean; result?: string; status?: string; ticketCode?: string; batchNo?: string; error?: string }[] }>('/evidence/upload-zip', { method: 'POST', body });
             setZipResult(result);
-            message.success(`成功 ${result.succeeded} 张，已归档 ${result.archived} 张，失败 ${result.failed} 张`);
+            message.success(`成功 ${result.succeeded} 张，已归档 ${result.archived} 张，待归档 ${result.pending} 张，失败 ${result.failed} 张`);
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有归档'); }
           return false;
@@ -615,13 +615,14 @@ export function WatermarksPage() {
       </Space>} />
       <ErrorNote error={error} />
       {zipResult ? <div style={{ marginBottom: 12 }}>
-        <div>成功 {zipResult.succeeded} 张，已归档 {zipResult.archived} 张，失败 {zipResult.failed} 张</div>
-        {zipResult.items.map((item, index) => <div key={`${item.filename}-${index}`} style={{ color: 'var(--ds-text-3)' }}>{item.filename}：{item.ok ? (item.status === 'ARCHIVED' ? `已归档 ${item.ticketCode || ''}` : '待归档') : item.error}</div>)}
+        <div>成功 {zipResult.succeeded} 张，已归档 {zipResult.archived} 张，待归档 {zipResult.pending} 张，失败 {zipResult.failed} 张{zipResult.batchNo ? `。批次 ${zipResult.batchNo}` : ''}</div>
+        {zipResult.items.map((item, index) => <div key={`${item.filename}-${index}`} style={{ color: 'var(--ds-text-3)' }}>{item.filename}：{item.result === 'failed' || !item.ok ? item.error : item.result === 'pending' || item.status !== 'ARCHIVED' ? `待归档 ${item.batchNo || ''}` : `已归档 ${item.ticketCode || ''}`}</div>)}
       </div> : null}
       <Space wrap style={{ marginBottom: 12 }}>
         <Select style={{ width: 220 }} placeholder="剧" value={form.dramaId || undefined} onChange={(dramaId) => setForm({ ...form, dramaId })} options={dramas.map((item) => ({ value: item.id, label: item.title }))} />
         <Select style={{ width: 160 }} placeholder="平台" value={form.platformId || undefined} onChange={(platformId) => setForm({ ...form, platformId })} options={platforms.map((item) => ({ value: item.id, label: item.name }))} />
         <Input style={{ width: 140 }} placeholder="日期" value={form.shotDate} onChange={(event) => setForm({ ...form, shotDate: event.target.value })} />
+        <Input style={{ width: 180 }} placeholder="工单号，可留空" value={form.ticketCode} onChange={(event) => setForm({ ...form, ticketCode: event.target.value })} />
         <Select style={{ width: 120 }} value={form.kind} onChange={(kind) => setForm({ ...form, kind })} options={[{ value: 'DATA', label: '数据' }, { value: 'LISTING', label: '上架' }, { value: 'DELIST', label: '下架' }]} />
         <Input style={{ width: 220 }} placeholder="原文件名，用于自动匹配" value={form.filename} onChange={(event) => setForm({ ...form, filename: event.target.value })} />
         <Upload showUploadList={false} beforeUpload={async (file) => {
@@ -635,16 +636,38 @@ export function WatermarksPage() {
           return false;
         }}><Button type="primary" disabled={user?.role === 'ADMIN'}>上传并生成水印</Button></Upload>
       </Space>
+      {rows.some((shot) => shot.status !== 'ARCHIVED') ? <>
+        <h2 style={{ fontSize: 16, margin: '8px 0' }}>待归档</h2>
+        <div className="poster-grid">
+          {rows.filter((shot) => shot.status !== 'ARCHIVED').map((shot) => (
+            <Card key={shot.id} cover={shot.url ? <img src={shot.url} alt="" style={{ height: 160, objectFit: 'cover' }} /> : null} size="small">
+              <StatusTag status="PENDING" text="待归档" />
+              <div>{shot.filename || '未命名'}</div>
+              <div>{shot.drama?.title || '未匹配剧目'} · {shot.platform?.name || '未匹配平台'}</div>
+              <div>批次 {shot.batchNo || '—'} · {shot.operatorName || '上传人'}</div>
+              <div style={{ color: 'var(--ds-text-3)' }}>{shot.failReason || ''}</div>
+              <Button size="small" style={{ marginTop: 8 }} disabled={user?.role === 'ADMIN' || !form.dramaId || !form.platformId || !form.shotDate} onClick={async () => {
+                try {
+                  await api(`/watermarks/${shot.id}/assign`, { method: 'POST', json: { dramaId: form.dramaId, platformId: form.platformId, shotDate: form.shotDate, ticketCode: form.ticketCode.trim() || undefined } });
+                  message.success('已归档');
+                  load();
+                } catch (err) { message.error(err instanceof Error ? err.message : '没有归档'); }
+              }}>归档</Button>
+            </Card>
+          ))}
+        </div>
+      </> : null}
       <div className="poster-grid">
-        {rows.map((shot) => (
+        {rows.filter((shot) => shot.status === 'ARCHIVED').map((shot) => (
           <Card key={shot.id} cover={shot.url ? <img src={shot.url} alt="" style={{ height: 160, objectFit: 'cover' }} /> : null} size="small">
             <Space>
               {shot.watermarkedKey ? <Checkbox checked={picked.includes(shot.watermarkedKey)} onChange={(event) => setPicked((cur) => event.target.checked ? [...new Set([...cur, shot.watermarkedKey])] : cur.filter((key) => key !== shot.watermarkedKey))} /> : null}
-              <StatusTag status={shot.status === 'ARCHIVED' ? 'APPROVED' : 'PENDING'} text={shot.status === 'ARCHIVED' ? '已归档' : '待归档'} />
+              <StatusTag status="APPROVED" text="已归档" />
             </Space>
             <div>{shot.drama?.title || '未匹配剧目'} · {shot.platform?.name || '未匹配平台'}</div>
             <div>工单号 {shot.ticketCode || '—'}</div>
-            <div style={{ color: 'var(--ds-text-3)' }}>{shot.shortHash} {shot.failReason || ''}</div>
+            {shot.batchNo ? <div>批次 {shot.batchNo}</div> : null}
+            <div style={{ color: 'var(--ds-text-3)' }}>{shot.shortHash}</div>
           </Card>
         ))}
       </div>
