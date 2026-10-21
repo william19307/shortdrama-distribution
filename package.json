@@ -1,0 +1,24 @@
+{
+  "name": "shortform-platform",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma", "sharp", "esbuild", "@nestjs/core"]
+  },
+  "scripts": {
+    "env:sync": "node -e \"const fs=require('fs'); if(!fs.existsSync('.env')) fs.copyFileSync('.env.example','.env'); fs.mkdirSync('apps/api',{recursive:true}); fs.copyFileSync('.env','apps/api/.env');\"",
+    "build:shared": "pnpm --filter @shortform/shared build",
+    "db:generate": "pnpm --filter @shortform/api exec prisma generate",
+    "db:migrate": "pnpm --filter @shortform/api exec prisma migrate deploy",
+    "db:seed": "pnpm --filter @shortform/api exec tsx prisma/seed.ts",
+    "db:setup": "pnpm env:sync && pnpm build:shared && pnpm db:generate && pnpm db:migrate && pnpm db:seed",
+    "dev": "pnpm db:setup && pnpm --parallel --filter @shortform/api --filter @shortform/web dev",
+    "dev:api": "pnpm --filter @shortform/api dev",
+    "dev:web": "pnpm --filter @shortform/web dev",
+    "test": "pnpm build:shared && pnpm db:generate && pnpm --filter @shortform/api test",
+    "typecheck": "pnpm build:shared && pnpm --filter @shortform/api --filter @shortform/web --filter @shortform/shared typecheck"
+  }
+}

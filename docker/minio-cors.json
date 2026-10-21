@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigin": ["*"],
+    "AllowedMethod": ["GET", "PUT", "POST", "HEAD", "DELETE"],
+    "AllowedHeader": ["*"],
+    "ExposeHeader": ["ETag", "x-amz-request-id"],
+    "MaxAgeSeconds": 3600
+  }
+]

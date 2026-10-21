@@ -1,9 +1,15 @@
 # dependencies
 node_modules/
 
-# Vite build output (root-level single-file HTML prototypes are kept)
+# Vite / nest / tsc build output (root-level single-file HTML prototypes are kept)
 dist/
 dist-v2/
+
+# env & logs
+.env
+.env.local
+*.log
+coverage/
 
 # macOS
 .DS_Store
