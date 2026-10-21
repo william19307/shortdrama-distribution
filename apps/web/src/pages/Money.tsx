@@ -38,7 +38,8 @@ export function SettlementsPage() {
   const { message } = App.useApp();
   const client = user?.role === 'CLIENT';
   const { mode } = useDsTheme();
-  const canReview = user?.role === 'FINANCE' || user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER';
+  const viewOnly = user?.role === 'ADMIN';
+  const canReview = user?.role === 'FINANCE' || user?.role === 'OPS_MANAGER' || viewOnly;
   const [form] = Form.useForm();
   const [rows, setRows] = useState<SettlementPage | null>(null);
   const [detail, setDetail] = useState<Settlement | null>(null);
@@ -118,8 +119,8 @@ export function SettlementsPage() {
           <Form.Item name="companyId" rules={[{ required: true }]}><Select style={{ width: 220 }} placeholder="客户" options={companies.map((item) => ({ value: item.id, label: item.name }))} /></Form.Item>
           <Form.Item name="periodStart" rules={[{ required: true }]}><Input placeholder="开始 YYYY-MM-DD" /></Form.Item>
           <Form.Item name="periodEnd" rules={[{ required: true }]}><Input placeholder="结束 YYYY-MM-DD" /></Form.Item>
-          <Button htmlType="submit">生成结算单</Button>
-          <Button htmlType="button" onClick={async () => {
+          <Button htmlType="submit" disabled={viewOnly}>生成结算单</Button>
+          <Button htmlType="button" disabled={viewOnly} onClick={async () => {
             const values = form.getFieldsValue();
             if (!values.periodStart || !values.periodEnd) { message.warning('先填写这个周期的开始和结束日期'); return; }
             try {
@@ -193,13 +194,13 @@ export function SettlementsPage() {
               <Form.Item name="internalNote" label="内部说明（客户看不到）" rules={[{ required: true }]}><Input.TextArea /></Form.Item>
               <Form.Item name="clientNote" label="给客户的说明"><Input.TextArea /></Form.Item>
               {detail.amountCny != null ? <Form.Item name="reason" label="修改原因" rules={[{ required: true }]}><Input /></Form.Item> : null}
-              <Button type="primary" htmlType="submit">提交金额</Button>
+              <Button type="primary" htmlType="submit" disabled={viewOnly}>提交金额</Button>
             </Form>
           ) : null}
           {!client && detail.status === 'PENDING_REVIEW' && canReview ? (
             <Space style={{ marginTop: 12 }}>
-              <Button type="primary" onClick={async () => { try { setDetail(await api(`/settlements/${detail.id}/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
-              <Button danger onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setDetail(await api(`/settlements/${detail.id}/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
+              <Button type="primary" disabled={viewOnly} onClick={async () => { try { setDetail(await api(`/settlements/${detail.id}/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
+              <Button danger disabled={viewOnly} onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setDetail(await api(`/settlements/${detail.id}/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
             </Space>
           ) : null}
         </div>
@@ -268,7 +269,8 @@ export function WithdrawalsPage() {
   const { user } = useAuth();
   const [rows, setRows] = useState<Page<Withdrawal> | null>(null);
   const [error, setError] = useState('');
-  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
+  const viewOnly = user?.role === 'ADMIN';
+  const finance = user?.role === 'FINANCE' || viewOnly;
   const load = () => api<Page<Withdrawal>>('/withdrawals?page=1&pageSize=50').then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, []);
 
@@ -291,9 +293,9 @@ export function WithdrawalsPage() {
           title: '处理',
           render: (_, row: Withdrawal) => finance ? (
             <Space>
-              {row.status === 'VERIFYING' ? <><Button type="primary" size="small" onClick={() => act(`/withdrawals/${row.id}/verify`, { pass: true })}>核对通过</Button><Button size="small" danger onClick={() => act(`/withdrawals/${row.id}/verify`, { pass: false, reason: '资料不符' })}>退回</Button></> : null}
-              {row.status === 'INVOICE_REVIEW' ? <><Button type="primary" size="small" onClick={() => act(`/withdrawals/${row.id}/invoice/review`, { pass: true })}>发票通过</Button><Button size="small" danger onClick={() => { const reason = window.prompt('驳回原因') || ''; if (reason) act(`/withdrawals/${row.id}/invoice/review`, { pass: false, reason }); }}>驳回发票</Button></> : null}
-              {row.status === 'PAYING' ? <PayButton id={row.id} companyId={row.company?.id} onDone={load} /> : null}
+              {row.status === 'VERIFYING' ? <><Button type="primary" size="small" disabled={viewOnly} onClick={() => act(`/withdrawals/${row.id}/verify`, { pass: true })}>核对通过</Button><Button size="small" danger disabled={viewOnly} onClick={() => act(`/withdrawals/${row.id}/verify`, { pass: false, reason: '资料不符' })}>退回</Button></> : null}
+              {row.status === 'INVOICE_REVIEW' ? <><Button type="primary" size="small" disabled={viewOnly} onClick={() => act(`/withdrawals/${row.id}/invoice/review`, { pass: true })}>发票通过</Button><Button size="small" danger disabled={viewOnly} onClick={() => { const reason = window.prompt('驳回原因') || ''; if (reason) act(`/withdrawals/${row.id}/invoice/review`, { pass: false, reason }); }}>驳回发票</Button></> : null}
+              {row.status === 'PAYING' ? <PayButton id={row.id} companyId={row.company?.id} disabled={viewOnly} onDone={load} /> : null}
             </Space>
           ) : null,
         },
@@ -302,10 +304,10 @@ export function WithdrawalsPage() {
   );
 }
 
-function PayButton({ id, companyId, onDone }: { id: string; companyId?: string; onDone: () => void }) {
+function PayButton({ id, companyId, disabled, onDone }: { id: string; companyId?: string; disabled?: boolean; onDone: () => void }) {
   const { message } = App.useApp();
   return (
-    <Upload showUploadList={false} beforeUpload={async (file) => {
+    <Upload disabled={disabled} showUploadList={false} beforeUpload={async (file) => {
       try {
         const uploaded = await uploadFile(file, 'VOUCHER', { companyId });
         await api(`/withdrawals/${id}/pay`, { method: 'POST', json: { voucherKey: uploaded.key } });
@@ -313,7 +315,7 @@ function PayButton({ id, companyId, onDone }: { id: string; companyId?: string; 
         onDone();
       } catch (err) { message.error(err instanceof Error ? err.message : '没有打款'); }
       return false;
-    }}><Button type="primary" size="small">上传回单并打款</Button></Upload>
+    }}><Button type="primary" size="small" disabled={disabled}>上传回单并打款</Button></Upload>
   );
 }
 

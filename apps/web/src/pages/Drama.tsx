@@ -182,7 +182,7 @@ export function DramaPage() {
                       <span>{asset.name}</span>
                       {asset.reviewStatus ? <StatusTag status={asset.reviewStatus} /> : null}
                       {staffReview && (asset.type === 'LICENSE' || asset.type === 'COPYRIGHT') && asset.reviewStatus !== 'APPROVED' ? (
-                        <Button size="small" type="primary" onClick={async () => { try { await api(`/assets/${asset.id}/review`, { method: 'POST', json: { pass: true } }); message.success('授权材料已通过'); const next = await api<Drama>(`/dramas/${id}`); setDrama(next); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>审核通过</Button>
+                        <Button size="small" type="primary" disabled={user?.role === 'ADMIN'} onClick={async () => { try { await api(`/assets/${asset.id}/review`, { method: 'POST', json: { pass: true } }); message.success('授权材料已通过'); const next = await api<Drama>(`/dramas/${id}`); setDrama(next); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>审核通过</Button>
                       ) : null}
                     </Space>
                   ))}

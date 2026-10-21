@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 import { StorageService } from '../core/storage.service';
 import { shanghaiStamp, stampImage } from './watermark';
@@ -62,7 +62,8 @@ export class MetricsService {
   }
 
   async saveDaily(user: AuthUser, input: z.infer<typeof dailyStatSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN', 'BD']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD']);
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }), '剧目不存在');
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, drama.company);
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }), '平台不存在');
@@ -121,7 +122,8 @@ export class MetricsService {
   }
 
   async reportDaily(user: AuthUser, id: string, note: string) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '问题行上报由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '问题行上报由运营主管处理');
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }), '日报不存在');
     if (row.status === 'LOCKED') throw new BadRequestException('已锁定的数据不能上报');
     const text = note.trim();
@@ -135,7 +137,8 @@ export class MetricsService {
   }
 
   async forcePublish(user: AuthUser, id: string, reason: string) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '强制发布由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '强制发布由运营主管处理');
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }), '日报不存在');
     if (row.status === 'LOCKED') throw new BadRequestException('已锁定的数据不能强制发布');
     const updated = await this.prisma.dailyStat.update({
@@ -147,7 +150,8 @@ export class MetricsService {
   }
 
   async reviewDaily(user: AuthUser, id: string) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE']);
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id }, include: { company: true } }));
     if (user.role === 'OPS') assertCompanyAccess(user, row.company);
     if (row.enteredById === user.id) throw new ForbiddenException('不能复核自己录入的数据');
@@ -162,7 +166,8 @@ export class MetricsService {
   }
 
   async lockDaily(user: AuthUser, id: string) {
-    assertRole(user, ['FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE']);
     const row = assertFound(await this.prisma.dailyStat.findUnique({ where: { id } }));
     if (row.status !== 'REVIEWED') throw new BadRequestException('复核通过后才能锁定');
     if (row.enteredById === user.id) throw new ForbiddenException('录入人不能锁定');
@@ -175,7 +180,8 @@ export class MetricsService {
   }
 
   async createWatermark(user: AuthUser, input: z.infer<typeof watermarkCreateSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD']);
     let original: Buffer;
     try {
       original = await this.storage.getObject(input.fileKey);
@@ -239,7 +245,8 @@ export class MetricsService {
   }
 
   async assignWatermark(user: AuthUser, id: string, input: z.infer<typeof watermarkAssignSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD']);
     const shot = assertFound(await this.prisma.watermarkShot.findUnique({ where: { id } }));
     const drama = assertFound(await this.prisma.drama.findUnique({ where: { id: input.dramaId }, include: { company: true } }));
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id: input.platformId } }));
@@ -401,6 +408,7 @@ export class MetricsService {
   }
 
   async message(user: AuthUser, id: string, input: z.infer<typeof ticketMessageSchema>) {
+    assertBusinessWrite(user);
     const ticket = await this.getTicket(user, id);
     await this.prisma.ticketMessage.create({ data: { ticketId: id, authorId: user.id, authorName: user.name, content: input.content } });
     const next = user.role === 'CLIENT' ? 'IN_PROGRESS' : ticket.status === 'PENDING_CLIENT' ? 'PENDING_CLIENT' : 'IN_PROGRESS';

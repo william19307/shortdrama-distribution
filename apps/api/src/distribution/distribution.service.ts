@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, shareDto } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
 
@@ -182,7 +182,8 @@ export class DistributionService {
   }
 
   async assign(user: AuthUser, planId: string, assigneeId: string) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '分派由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '分派由运营主管处理');
     const plan = await this.must(user, planId);
     if (!['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'].includes(plan.status)) {
       throw new BadRequestException('当前状态不能改派');
@@ -196,7 +197,8 @@ export class DistributionService {
   }
 
   async reassign(user: AuthUser, planId: string, input: { assigneeId: string; reason?: string }) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '改派由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '改派由运营主管处理');
     const plan = await this.must(user, planId);
     const updated = await this.assign(user, planId, input.assigneeId);
     await this.audit.write(user.id, 'review.reassign', 'DistributionPlan', planId, { from: plan.assigneeId, to: input.assigneeId, reason: input.reason ?? '' });
@@ -204,7 +206,8 @@ export class DistributionService {
   }
 
   async spotCheck(user: AuthUser, input: { ratio: number; results?: { planId: string; result: 'PASS' | 'FAIL' | 'NOTE'; note?: string }[] }) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '抽检由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '抽检由运营主管处理');
     if (input.results?.length) {
       const created = [];
       for (const item of input.results) {
@@ -231,7 +234,8 @@ export class DistributionService {
   }
 
   async expand(user: AuthUser, planId: string) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '扩大抽检由运营主管处理');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '扩大抽检由运营主管处理');
     const plan = await this.must(user, planId);
     if (plan.status !== 'IN_REVIEW') throw new BadRequestException('只有审核中的申请可以扩大抽检');
     await this.prisma.episode.updateMany({ where: { dramaId: plan.dramaId, reviewStatus: 'UNSAMPLED' }, data: { reviewStatus: 'PENDING' } });
@@ -323,7 +327,8 @@ export class DistributionService {
   }
 
   async reviewShares(user: AuthUser, planId: string, input: { pass: boolean; reason?: string }) {
-    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '分成由运营主管或管理员复核');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '分成由运营主管复核');
     const plan = await this.must(user, planId);
     if (plan.status !== 'SHARE_REVIEW') throw new BadRequestException('当前没有待复核的分成');
     if (plan.shares.some((share) => share.submittedById === user.id)) throw new ForbiddenException('不能复核自己提交的分成');
@@ -349,7 +354,8 @@ export class DistributionService {
   }
 
   async patchListing(user: AuthUser, listingId: string, input: { status: string; platformDramaId?: string; listingUrl?: string; listedAt?: string }) {
-    assertRole(user, ['BD', 'OPS', 'OPS_MANAGER', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['BD', 'OPS', 'OPS_MANAGER']);
     const listing = assertFound(
       await this.prisma.planPlatform.findUnique({ where: { id: listingId }, include: { plan: { include: { company: true, platforms: true } } } }),
       '发行记录不存在',
@@ -420,7 +426,8 @@ export class DistributionService {
   }
 
   private assertReviewer(user: AuthUser, plan: { assigneeId: string | null; company: { id: string; ownerId: string | null } }) {
-    if (user.role === 'ADMIN' || user.role === 'OPS_MANAGER') return;
+    assertBusinessWrite(user);
+    if (user.role === 'OPS_MANAGER') return;
     if (user.role !== 'OPS') throw new ForbiddenException('只有负责运营可以审核');
     if (plan.assigneeId && plan.assigneeId === user.id) return;
     assertCompanyAccess(user, plan.company);

@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 import { SettingsService } from '../core/settings.service';
 import { StorageService } from '../core/storage.service';
@@ -35,7 +35,7 @@ const CONTRACT_NEXT: Record<string, string[]> = {
   EFFECTIVE: ['EXPIRED'],
   EXPIRED: [],
 };
-const CONTRACT_CONFIRM_ROLES = ['OPS', 'OPS_MANAGER', 'ADMIN'];
+const CONTRACT_CONFIRM_ROLES = ['OPS', 'OPS_MANAGER'];
 
 @Injectable()
 export class CommerceService {
@@ -100,7 +100,8 @@ export class CommerceService {
       await this.assertContractScan(contract.companyId, input.fileKey);
       return this.writeContract(user, contract, 'PENDING_CONFIRM', input.fileKey, input.note);
     }
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'BD']);
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, contract.company);
     let nextStatus = input.status ?? contract.status;
     const nextFileKey = input.fileKey !== undefined ? input.fileKey : contract.fileKey;
@@ -121,7 +122,7 @@ export class CommerceService {
       if (contract.status !== 'PENDING_CONFIRM') throw new BadRequestException('合同须先进入「待确认」且上传扫描件后，才能确认生效');
       if (!nextFileKey) throw new BadRequestException('确认生效前必须已上传签署扫描件');
       await this.assertContractScan(contract.companyId, nextFileKey);
-      if (!CONTRACT_CONFIRM_ROLES.includes(user.role)) throw new ForbiddenException('仅运营或管理员可确认合同生效');
+      if (!CONTRACT_CONFIRM_ROLES.includes(user.role)) throw new ForbiddenException('仅运营可确认合同生效');
     }
     return this.writeContract(user, contract, nextStatus, input.fileKey, input.note, nextFileKey);
   }
@@ -190,7 +191,8 @@ export class CommerceService {
   }
 
   async generate(user: AuthUser, input: z.infer<typeof settlementGenerateSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE']);
     const company = await this.readCompany(user, input.companyId);
     if (user.role === 'OPS' || user.role === 'BD') assertCompanyAccess(user, company);
     const start = day(input.periodStart);
@@ -256,7 +258,8 @@ export class CommerceService {
   }
 
   async generateBatch(user: AuthUser, input: z.infer<typeof settlementBatchSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'FINANCE']);
     const start = day(input.periodStart);
     const end = day(input.periodEnd);
     if (end < start) throw new BadRequestException('结算周期结束日不能早于开始日');
@@ -294,7 +297,8 @@ export class CommerceService {
   }
 
   async enterAmount(user: AuthUser, id: string, input: z.infer<typeof settlementAmountSchema>) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER']);
     const row = assertFound(await this.prisma.settlement.findUnique({ where: { id }, include: { company: true, lines: true } }));
     if (user.role === 'OPS') assertCompanyAccess(user, row.company);
     if (['VERIFYING', 'PENDING_INVOICE', 'INVOICE_REVIEW', 'PAYING', 'PAID', 'NO_SETTLEMENT'].includes(row.status)) {
@@ -346,7 +350,8 @@ export class CommerceService {
   }
 
   async reviewSettlement(user: AuthUser, id: string, input: z.infer<typeof settlementReviewSchema>) {
-    assertRole(user, ['FINANCE', 'ADMIN', 'OPS_MANAGER'], '应结金额由财务、运营主管或管理员复核');
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE', 'OPS_MANAGER'], '应结金额由财务或运营主管复核');
     const row = assertFound(await this.prisma.settlement.findUnique({ where: { id } }));
     if (row.status !== 'PENDING_REVIEW') throw new BadRequestException('当前不是待复核');
     if (!row.enteredById || row.amountCny == null) throw new BadRequestException('还没有录入金额');
@@ -415,7 +420,8 @@ export class CommerceService {
   }
 
   async verifyWithdrawal(user: AuthUser, id: string, pass: boolean, reason?: string) {
-    assertRole(user, ['FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE']);
     const row = await this.prisma.$transaction(async (tx) => {
       const current = assertFound(await tx.withdrawal.findUnique({ where: { id }, include: { settlements: true } }), '提款单不存在');
       if (current.status !== 'VERIFYING') throw new BadRequestException('提款单状态已变化，请刷新');
@@ -441,7 +447,8 @@ export class CommerceService {
   }
 
   async reviewInvoice(user: AuthUser, id: string, input: z.infer<typeof invoiceReviewSchema>) {
-    assertRole(user, ['FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE']);
     if (!input.pass && !input.reason) throw new BadRequestException('驳回发票时请填写原因');
     const row = await this.prisma.$transaction(async (tx) => {
       const current = assertFound(await tx.withdrawal.findUnique({ where: { id }, include: { settlements: true } }), '提款单不存在');
@@ -469,7 +476,8 @@ export class CommerceService {
   }
 
   async pay(user: AuthUser, id: string, input: z.infer<typeof paySchema>) {
-    assertRole(user, ['FINANCE', 'ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE']);
     const paidAt = new Date();
     const row = await this.prisma.$transaction(async (tx) => {
       const current = assertFound(await tx.withdrawal.findUnique({ where: { id }, include: { settlements: true } }), '提款单不存在');
@@ -482,7 +490,7 @@ export class CommerceService {
   }
 
   async listRates(user: AuthUser) {
-    assertRole(user, ['FINANCE', 'ADMIN', 'OPS_MANAGER', 'OPS']);
+    assertRole(user, ['FINANCE', 'OPS_MANAGER', 'OPS', 'ADMIN']);
     return this.prisma.exchangeRate.findMany({ where: { voidedAt: null }, orderBy: { rateDate: 'desc' }, take: 200 });
   }
 

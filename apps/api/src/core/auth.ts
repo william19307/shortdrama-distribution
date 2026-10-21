@@ -42,6 +42,11 @@ export function assertRole(user: AuthUser, roles: Role[], message = '没有权�
   if (!roles.includes(user.role)) throw new ForbiddenException(message);
 }
 
+/** 管理员可以看全部运营页面，但合同、审核、分成、数据录入等业务写入返回 403。 */
+export function assertBusinessWrite(user: AuthUser) {
+  if (user.role === 'ADMIN') throw new ForbiddenException('管理员只能修改系统配置，不能办理业务');
+}
+
 export async function nextCode(tx: Prisma.TransactionClient, prefix: string, pad = 5) {
   const row = await tx.counter.upsert({
     where: { id: prefix },

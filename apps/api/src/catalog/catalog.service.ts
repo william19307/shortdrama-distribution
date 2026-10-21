@@ -14,7 +14,7 @@ import {
 import { z } from 'zod';
 import { assertCompanyAccess, assertFound, safeFilename } from '../core/access';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser, nextCode } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 import { StorageService } from '../core/storage.service';
 
@@ -135,6 +135,7 @@ export class CatalogService {
   }
 
   async initUpload(user: AuthUser, input: z.infer<typeof uploadInitSchema>) {
+    assertBusinessWrite(user);
     const companyId = await this.companyForUpload(user, input);
     if (input.purpose === 'EPISODE' && (!input.dramaId || !input.episodeNo)) {
       throw new BadRequestException('上传剧集时需要指定剧目和集号');
@@ -306,7 +307,8 @@ export class CatalogService {
   }
 
   async reviewAsset(user: AuthUser, id: string, input: { pass: boolean; reason?: string }) {
-    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN'], '授权材料由运营审核');
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER'], '授权材料由运营审核');
     const asset = assertFound(
       await this.prisma.asset.findUnique({ where: { id }, include: { company: true } }),
       '授权材料不存在',

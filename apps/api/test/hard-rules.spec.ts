@@ -227,20 +227,23 @@ describe('提款并发、商务隔离、合同状态机、主管复核', () => {
     const created = await authed(client).post('/api/contracts').send({ title: '发行合同', dramaIds: [drama.id] });
     expect(created.status).toBeLessThan(300);
     const admin = await login('admin-rules@studio.example');
-    const jump = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    const ops = await login('lead-rules@studio.example');
+    const adminJump = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    expect(adminJump.status).toBe(403);
+    const jump = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(jump.status).toBe(400);
-    const draft = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'DRAFTING' });
+    const draft = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'DRAFTING' });
     expect(draft.status).toBeLessThan(300);
-    const sign = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_SIGN' });
+    const sign = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_SIGN' });
     expect(sign.status).toBeLessThan(300);
     const fileKey = `${company!.id}/contract/scan.pdf`;
     await app.get(StorageService).putObject(fileKey, Buffer.from('scan'), 'application/pdf');
     await prisma.uploadSession.create({
       data: { companyId: company!.id, key: fileKey, purpose: 'CONTRACT', fileName: 'scan.pdf', contentType: 'application/pdf', size: 4, status: 'COMPLETED', expiresAt: new Date(Date.now() + 3_600_000) },
     });
-    const confirm = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM', fileKey });
+    const confirm = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM', fileKey });
     expect(confirm.status).toBeLessThan(300);
-    const live = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    const live = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(live.status).toBeLessThan(300);
   });
 });

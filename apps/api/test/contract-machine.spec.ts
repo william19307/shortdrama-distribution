@@ -63,34 +63,42 @@ describe('合同状态机', () => {
     await prisma.user.create({
       data: { email: `contract-admin-${stamp}@example.com`, name: '合同管理员', role: 'ADMIN', passwordHash: hashSync(PASS, 4) },
     });
+    await prisma.user.create({
+      data: { email: `contract-ops-${stamp}@example.com`, name: '合同运营', role: 'OPS', passwordHash: hashSync(PASS, 4) },
+    });
     const drama = await prisma.drama.create({ data: { code: `HTD${stamp}`, companyId: company.id, title: '合同剧', nameNorm: `合同剧${stamp}` } });
     const client = await login(`contract-${stamp}@example.com`);
     const created = await authed(client).post('/api/contracts').send({ title: '发行合同', dramaIds: [drama.id] });
     expect(created.status).toBeLessThan(300);
     expect(created.body.status).toBe('APPLYING');
 
+    const opsUser = await prisma.user.findUnique({ where: { email: `contract-ops-${stamp}@example.com` } });
+    await prisma.company.update({ where: { id: company.id }, data: { ownerId: opsUser!.id } });
     const admin = await login(`contract-admin-${stamp}@example.com`);
-    const jump = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    const ops = await login(`contract-ops-${stamp}@example.com`);
+    const adminDraft = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'DRAFTING' });
+    expect(adminDraft.status).toBe(403);
+    const jump = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(jump.status).toBe(400);
     expect(jump.body.message).toContain('不能从');
 
-    const draft = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'DRAFTING' });
+    const draft = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'DRAFTING' });
     expect(draft.status).toBeLessThan(300);
     expect(draft.body.status).toBe('DRAFTING');
-    const sign = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_SIGN' });
+    const sign = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_SIGN' });
     expect(sign.status).toBeLessThan(300);
-    const confirmBare = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM' });
+    const confirmBare = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM' });
     expect(confirmBare.status).toBe(400);
     expect(confirmBare.body.message).toContain('扫描件');
-    const confirm = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM', fileKey: await putScan(company.id) });
+    const confirm = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'PENDING_CONFIRM', fileKey: await putScan(company.id) });
     expect(confirm.status).toBeLessThan(300);
     expect(confirm.body.status).toBe('PENDING_CONFIRM');
-    const live = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    const live = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(live.status).toBeLessThan(300);
     expect(live.body.status).toBe('EFFECTIVE');
-    const expired = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EXPIRED' });
+    const expired = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EXPIRED' });
     expect(expired.status).toBeLessThan(300);
-    const back = await authed(admin).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
+    const back = await authed(ops).patch(`/api/contracts/${created.body.id}`).send({ status: 'EFFECTIVE' });
     expect(back.status).toBe(400);
   });
 
@@ -115,8 +123,11 @@ describe('合同状态机', () => {
     const otherToken = await login(`sign-other-${stamp}@example.com`);
     const foreign = await authed(otherToken).post('/api/contracts').send({ title: '别人的合同', dramaIds: [otherDrama.id] });
     const admin = await login(`sign-admin-${stamp}@example.com`);
-    await authed(admin).patch(`/api/contracts/${mine.body.id}`).send({ status: 'DRAFTING' });
-    await authed(admin).patch(`/api/contracts/${mine.body.id}`).send({ status: 'PENDING_SIGN' });
+    const opsToken = await login(`sign-ops-${stamp}@example.com`);
+    const blocked = await authed(admin).patch(`/api/contracts/${mine.body.id}`).send({ status: 'DRAFTING' });
+    expect(blocked.status).toBe(403);
+    await authed(opsToken).patch(`/api/contracts/${mine.body.id}`).send({ status: 'DRAFTING' });
+    await authed(opsToken).patch(`/api/contracts/${mine.body.id}`).send({ status: 'PENDING_SIGN' });
 
     const finance = await login(`sign-fin-${stamp}@example.com`);
     const finPatch = await authed(finance).patch(`/api/contracts/${mine.body.id}`).send({ note: '财务备注' });
@@ -147,7 +158,6 @@ describe('合同状态机', () => {
     const bdLive = await authed(bdToken).patch(`/api/contracts/${mine.body.id}`).send({ status: 'EFFECTIVE' });
     expect(bdLive.status).toBe(403);
 
-    const opsToken = await login(`sign-ops-${stamp}@example.com`);
     const live = await authed(opsToken).patch(`/api/contracts/${mine.body.id}`).send({ status: 'EFFECTIVE' });
     expect(live.status).toBeLessThan(300);
     expect(live.body.status).toBe('EFFECTIVE');

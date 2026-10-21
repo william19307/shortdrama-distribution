@@ -83,7 +83,7 @@ describe('核心流程', () => {
     for (const name of ['ReelShort', 'DramaBox', 'ShortMax', 'FlexTV', 'GoodShort']) {
       const created = await authed(admin.token).post('/api/platforms').send({ name, syncLag: name === 'ShortMax' ? 'T2' : 'T1' });
       expect(created.status).toBeLessThan(300);
-      const patched = await authed(admin.token).patch(`/api/platforms/${created.body.id}`).send({ firstBatch: true, enabled: true });
+      const patched = await authed(manager.token).patch(`/api/platforms/${created.body.id}`).send({ firstBatch: true, enabled: true });
       expect(patched.status).toBeLessThan(300);
       const opsFirst = await authed(ops.token).patch(`/api/platforms/${created.body.id}`).send({ enabled: false });
       expect(opsFirst.status).toBe(403);
@@ -104,7 +104,9 @@ describe('核心流程', () => {
     const mgrCompanies = await authed(manager.token).get('/api/companies?page=1&pageSize=20');
     expect(mgrCompanies.status).toBeLessThan(300);
     expect(mgrCompanies.body.total).toBeGreaterThan(0);
-    await authed(admin.token).patch(`/api/companies/${companyId}/owner`).send({ ownerId: ops.user.id });
+    await authed(manager.token).patch(`/api/companies/${companyId}/owner`).send({ ownerId: ops.user.id });
+    const adminOwner = await authed(admin.token).patch(`/api/companies/${companyId}/owner`).send({ ownerId: ops.user.id });
+    expect(adminOwner.status).toBe(403);
 
     const cert = await authed(clientToken).put('/api/company/certification').send({
       name: '测试影业有限公司',
@@ -183,7 +185,9 @@ describe('核心流程', () => {
       guaranteeCurrency: 'USD',
       guaranteePeriodDays: 90,
     }));
-    const shares = await authed(admin.token).put(`/api/plans/${planId}/shares`).send({ items });
+    const adminShares = await authed(admin.token).put(`/api/plans/${planId}/shares`).send({ items });
+    expect(adminShares.status).toBe(403);
+    const shares = await authed(ops.token).put(`/api/plans/${planId}/shares`).send({ items });
     expect(shares.status).toBeLessThan(300);
     const clientView = await authed(clientToken).get(`/api/plans/${planId}`);
     const dumped = JSON.stringify(clientView.body);
@@ -247,17 +251,19 @@ describe('核心流程', () => {
 
     const small = await authed(ops.token).post('/api/settlements/generate').send({ companyId, periodStart: '2026-10-01', periodEnd: '2026-10-31' });
     expect(small.status).toBeLessThan(300);
-    const badMoney = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.123', internalNote: '三位小数' });
+    const badMoney = await authed(ops.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.123', internalNote: '三位小数' });
     expect(badMoney.status).toBe(400);
-    const entered = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '手工应结，内部可见' });
+    const adminAmount = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '管理员不能录入' });
+    expect(adminAmount.status).toBe(403);
+    const entered = await authed(ops.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '手工应结，内部可见' });
     expect(entered.status).toBeLessThan(300);
-    const selfSettle = await authed(admin.token).post(`/api/settlements/${small.body.id}/review`).send({ pass: true });
+    const selfSettle = await authed(ops.token).post(`/api/settlements/${small.body.id}/review`).send({ pass: true });
     expect(selfSettle.status).toBe(403);
     const below = await authed(finance.token).post(`/api/settlements/${small.body.id}/review`).send({ pass: true });
     expect(below.body.status).toBe('BELOW_MINIMUM');
 
     const big = await authed(ops.token).post('/api/settlements/generate').send({ companyId, periodStart: '2026-11-01', periodEnd: '2026-11-30' });
-    await authed(admin.token).post(`/api/settlements/${big.body.id}/amount`).send({ amountCny: '15000.00', internalNote: '第二期手工应结' });
+    await authed(ops.token).post(`/api/settlements/${big.body.id}/amount`).send({ amountCny: '15000.00', internalNote: '第二期手工应结' });
     const ready = await authed(finance.token).post(`/api/settlements/${big.body.id}/review`).send({ pass: true });
     expect(ready.body.status).toBe('PENDING_APPLY');
     const clientSettle = await authed(clientToken).get(`/api/settlements/${small.body.id}`);

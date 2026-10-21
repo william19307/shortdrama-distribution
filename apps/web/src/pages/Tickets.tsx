@@ -68,7 +68,7 @@ export function TicketsPage() {
                 } catch (err) { message.error(err instanceof Error ? err.message : '没有发出'); }
               }}>
                 <Input.TextArea value={text} onChange={(event) => setText(event.target.value)} rows={3} placeholder="补充说明" />
-                <Button htmlType="submit" type="primary" style={{ marginTop: 8 }} disabled={!text.trim()}>发送</Button>
+                <Button htmlType="submit" type="primary" style={{ marginTop: 8 }} disabled={!text.trim() || user?.role === 'ADMIN'}>发送</Button>
               </Form>
             </>
           ) : <span style={{ color: 'var(--ds-text-3)' }}>从左边选一张工单。</span>}

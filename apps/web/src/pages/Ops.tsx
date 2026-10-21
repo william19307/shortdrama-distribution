@@ -55,7 +55,8 @@ export function CompaniesPage() {
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [staff, setStaff] = useState<{ id: string; name: string; role: string }[]>([]);
-  const finance = user?.role === 'FINANCE' || user?.role === 'ADMIN';
+  const viewOnly = user?.role === 'ADMIN';
+  const finance = user?.role === 'FINANCE';
   const load = () => api<Page<Record<string, unknown>>>(`/companies${qs({ q, page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [q, page]);
   useEffect(() => { if (id) api<Record<string, any>>(`/companies/${id}`).then(setDetail).catch((err) => setError(err.message)); }, [id]);
@@ -86,31 +87,31 @@ export function CompaniesPage() {
         <Card title={detail.name} style={{ marginTop: 16 }} extra={<StatusTag status={detail.certStatus} />}>
           <p>信用代码 {detail.creditCode || '—'} · 法人 {detail.legalPerson || '—'} · 联系人 {detail.contactName || '—'} {detail.contactPhone || ''}</p>
           {detail.certRejectReason ? <p>驳回原因：{detail.certRejectReason}</p> : null}
-          {finance && ['PENDING', 'CHANGE_PENDING'].includes(detail.certStatus) ? (
+          {(finance || viewOnly) && ['PENDING', 'CHANGE_PENDING'].includes(detail.certStatus) ? (
             <Space>
-              <Button type="primary" onClick={async () => { await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: true } }); message.success('已通过'); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); load(); }}>通过认证</Button>
-              <Button danger onClick={async () => { const reason = window.prompt('驳回原因') || ''; if (!reason) return; await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: false, reason } }); load(); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); }}>驳回</Button>
+              <Button type="primary" disabled={viewOnly} onClick={async () => { await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: true } }); message.success('已通过'); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); load(); }}>通过认证</Button>
+              <Button danger disabled={viewOnly} onClick={async () => { const reason = window.prompt('驳回原因') || ''; if (!reason) return; await api(`/companies/${detail.id}/certification/review`, { method: 'POST', json: { pass: false, reason } }); load(); setDetail(await api<Record<string, any>>(`/companies/${detail.id}`)); }}>驳回</Button>
             </Space>
           ) : null}
-          {user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER' ? (
+          {user?.role === 'OPS_MANAGER' || viewOnly ? (
             <Space style={{ marginTop: 12 }} wrap>
-              {user.role === 'ADMIN' ? (
-                <Select
-                  style={{ width: 220 }}
-                  placeholder="指定负责运营"
-                  options={staff.filter((item) => item.role === 'OPS').map((item) => ({ value: item.id, label: item.name }))}
-                  onChange={async (ownerId) => { await api(`/companies/${detail.id}/owner`, { method: 'PATCH', json: { ownerId } }); message.success('已更新负责运营'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
-                />
-              ) : null}
+              <Select
+                style={{ width: 220 }}
+                placeholder="指定负责运营"
+                disabled={viewOnly}
+                options={staff.filter((item) => item.role === 'OPS').map((item) => ({ value: item.id, label: item.name }))}
+                onChange={async (ownerId) => { await api(`/companies/${detail.id}/owner`, { method: 'PATCH', json: { ownerId } }); message.success('已更新负责运营'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
+              />
               <Select
                 style={{ width: 220 }}
                 placeholder="指定负责商务"
+                disabled={viewOnly}
                 options={staff.filter((item) => item.role === 'BD').map((item) => ({ value: item.id, label: item.name }))}
                 onChange={async (bdId) => { await api(`/companies/${detail.id}/bd`, { method: 'PATCH', json: { bdId } }); message.success('已更新负责商务'); setDetail(await api(`/companies/${detail.id}`)); load(); }}
               />
             </Space>
           ) : null}
-          {user && ['OPS', 'FINANCE', 'ADMIN'].includes(user.role) ? <PolicyForm companyId={detail.id} /> : null}
+          {user && ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'].includes(user.role) ? <PolicyForm companyId={detail.id} /> : null}
         </Card>
       ) : null}
     </div>
@@ -140,7 +141,8 @@ export function ReviewsPage() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { message } = App.useApp();
-  const lead = user?.role === 'OPS_MANAGER' || user?.role === 'ADMIN';
+  const viewOnly = user?.role === 'ADMIN';
+  const lead = user?.role === 'OPS_MANAGER';
   const [ops, setOps] = useState<{ id: string; name: string }[]>([]);
   const [rows, setRows] = useState<Page<Plan> | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
@@ -194,17 +196,18 @@ export function ReviewsPage() {
         {plan ? (
           <>
           <Space wrap>
-            {['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button type="primary" onClick={async () => { await api(`/reviews/${plan.id}/open`, { method: 'POST' }); refresh(); }}>开始审核</Button> : null}
-            {lead && ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'].includes(plan.status) ? (
+            {['PENDING_ASSIGN', 'PENDING_REVIEW'].includes(plan.status) ? <Button type="primary" disabled={viewOnly} onClick={async () => { await api(`/reviews/${plan.id}/open`, { method: 'POST' }); refresh(); }}>开始审核</Button> : null}
+            {(lead || viewOnly) && ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'NEEDS_REVISION'].includes(plan.status) ? (
               <Select
                 style={{ width: 180 }}
                 placeholder="分派给运营"
+                disabled={viewOnly}
                 options={ops.map((item) => ({ value: item.id, label: item.name }))}
                 onChange={async (assigneeId) => { try { await api(`/reviews/${plan.id}/assign`, { method: 'POST', json: { assigneeId } }); message.success('已分派'); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '没有分派'); } }}
               />
             ) : null}
-            {lead && plan.status === 'IN_REVIEW' ? <Button onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
-            {plan.status === 'IN_REVIEW' ? <Button type="primary" onClick={async () => { try { await api(`/reviews/${plan.id}/finish`, { method: 'POST' }); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '还不能结束'); } }}>提交审核结果</Button> : null}
+            {(lead || viewOnly) && plan.status === 'IN_REVIEW' ? <Button disabled={viewOnly} onClick={async () => { await api(`/reviews/${plan.id}/expand`, { method: 'POST' }); message.success('已扩大抽检'); refresh(); }}>扩大抽检</Button> : null}
+            {plan.status === 'IN_REVIEW' ? <Button type="primary" disabled={viewOnly} onClick={async () => { try { await api(`/reviews/${plan.id}/finish`, { method: 'POST' }); refresh(); } catch (err) { message.error(err instanceof Error ? err.message : '还不能结束'); } }}>提交审核结果</Button> : null}
           </Space>
           {plan.rejectSummary ? <pre>{plan.rejectSummary}</pre> : null}
           <Table style={{ marginTop: 12 }} rowKey="id" pagination={false} dataSource={plan.episodes || []} columns={[
@@ -216,8 +219,8 @@ export function ReviewsPage() {
               title: '',
               render: (_, row) => ['PENDING', 'REPLACED'].includes(row.reviewStatus) && plan.status === 'IN_REVIEW' ? (
                 <Space>
-                  <Button size="small" type="primary" onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'APPROVED' } }); refresh(); }}>通过</Button>
-                  <Button size="small" danger onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'REJECTED', reason } }); refresh(); }}>驳回</Button>
+                  <Button size="small" type="primary" disabled={viewOnly} onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'APPROVED' } }); refresh(); }}>通过</Button>
+                  <Button size="small" danger disabled={viewOnly} onClick={async () => { await api(`/reviews/${plan.id}/episodes/${row.id}`, { method: 'POST', json: { decision: 'REJECTED', reason } }); refresh(); }}>驳回</Button>
                 </Space>
               ) : null,
             },
@@ -235,7 +238,8 @@ export function SharesPage() {
   const nav = useNavigate();
   const { user } = useAuth();
   const { message } = App.useApp();
-  const canReviewShares = user?.role === 'ADMIN' || user?.role === 'OPS_MANAGER';
+  const viewOnly = user?.role === 'ADMIN';
+  const canReviewShares = user?.role === 'OPS_MANAGER' || viewOnly;
   const [rows, setRows] = useState<Page<Plan> | null>(null);
   const [plan, setPlan] = useState<Plan | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>({});
@@ -273,20 +277,20 @@ export function SharesPage() {
             return (
               <Space key={item.platformId} wrap style={{ display: 'flex', marginBottom: 8 }}>
                 <span style={{ width: 140 }}><PlatformChip name={item.platformName} /></span>
-                <Select style={{ width: 120 }} value={row.mode} onChange={(value) => set('mode', value)} options={Object.entries(SHARE_MODE_LABEL).map(([value, label]) => ({ value, label }))} />
+                <Select disabled={viewOnly} style={{ width: 120 }} value={row.mode} onChange={(value) => set('mode', value)} options={Object.entries(SHARE_MODE_LABEL).map(([value, label]) => ({ value, label }))} />
                 <Input style={{ width: 100 }} value={row.clientRate} onChange={(event) => set('clientRate', event.target.value)} addonAfter="%" />
                 {row.mode === 'MG_OVER' ? <Input style={{ width: 120 }} placeholder="超出比例" value={row.overRate} onChange={(event) => set('overRate', event.target.value)} /> : null}
                 {row.mode !== 'NO_MG' ? <Input style={{ width: 140 }} placeholder="保底金额" value={row.guaranteeAmount} onChange={(event) => set('guaranteeAmount', event.target.value)} /> : null}
                 {row.mode !== 'NO_MG' ? <Input style={{ width: 80 }} value={row.guaranteeCurrency} onChange={(event) => set('guaranteeCurrency', event.target.value)} /> : null}
                 <Tag>{labelOf(item.listingStatus)}</Tag>
                 {['APPROVED', 'DISTRIBUTING', 'LIVE', 'OFFLINE'].includes(plan.status) ? (
-                  <Select style={{ width: 140 }} placeholder="上架结果" options={Object.keys(LISTING_LABEL).map((value) => ({ value, label: labelOf(value) }))} onChange={async (status) => { await api(`/listings/${item.id}`, { method: 'PATCH', json: { status } }); message.success('上架结果已更新'); const next = await api<Plan>(`/plans/${plan.id}`); setPlan(next); }} />
+                  <Select disabled={viewOnly} style={{ width: 140 }} placeholder="上架结果" options={Object.keys(LISTING_LABEL).map((value) => ({ value, label: labelOf(value) }))} onChange={async (status) => { await api(`/listings/${item.id}`, { method: 'PATCH', json: { status } }); message.success('上架结果已更新'); const next = await api<Plan>(`/plans/${plan.id}`); setPlan(next); }} />
                 ) : null}
               </Space>
             );
           })}
           {['SHARE_CONFIG', 'SHARE_REVIEW'].includes(plan.status) && user?.role !== 'FINANCE' ? (
-            <Button type="primary" onClick={async () => {
+            <Button type="primary" disabled={viewOnly} onClick={async () => {
               try {
                 const items = plan.platforms.map((item) => {
                   const row = draft[item.platformId];
@@ -300,8 +304,8 @@ export function SharesPage() {
           ) : null}
           {plan.status === 'SHARE_REVIEW' && canReviewShares ? (
             <Space>
-              <Button type="primary" onClick={async () => { try { setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
-              <Button danger onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
+              <Button type="primary" disabled={viewOnly} onClick={async () => { try { setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: true } })); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); } }}>复核通过</Button>
+              <Button danger disabled={viewOnly} onClick={async () => { const reason = window.prompt('退回原因') || ''; if (!reason) return; setPlan(await api(`/plans/${plan.id}/shares/review`, { method: 'POST', json: { pass: false, reason } })); load(); }}>退回</Button>
             </Space>
           ) : null}
           <Form layout="inline" style={{ marginTop: 16 }} onFinish={async (values) => {
@@ -322,7 +326,8 @@ export function SharesPage() {
 export function DailyPage() {
   const { user } = useAuth();
   const { message } = App.useApp();
-  const lead = user?.role === 'OPS_MANAGER' || user?.role === 'ADMIN';
+  const viewOnly = user?.role === 'ADMIN';
+  const lead = user?.role === 'OPS_MANAGER';
   const [rows, setRows] = useState<Page<any> | null>(null);
   const [platforms, setPlatforms] = useState<any[]>([]);
   const [dramas, setDramas] = useState<any[]>([]);
@@ -376,7 +381,7 @@ export function DailyPage() {
           <Form.Item name="watermarkId" label="截图编号"><Input placeholder="关联后才能复核" /></Form.Item>
           <Form.Item name="anomalyNote" label="异常说明"><Input /></Form.Item>
         </Space>
-        <Button type="primary" htmlType="submit">保存草稿</Button>
+        <Button type="primary" htmlType="submit" disabled={viewOnly}>保存草稿</Button>
       </Form>
       <Table style={{ marginTop: 16 }} rowKey="id" dataSource={rows?.items || []} pagination={{ current: page, pageSize: 20, total: rows?.total || 0, onChange: setPage, showSizeChanger: false }} columns={[
         { title: '日期', dataIndex: 'statDate', render: dayText },
@@ -387,10 +392,10 @@ export function DailyPage() {
         { title: '状态', dataIndex: 'status', render: (value) => <StatusTag status={value} /> },
         { title: '提示', dataIndex: 'lagWarning' },
         { title: '', render: (_, row) => <Space>
-          <Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/review`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有复核'); } }}>复核</Button>
-          <Button size="small" onClick={async () => { try { await api(`/daily-stats/${row.id}/lock`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有锁定'); } }}>锁定</Button>
-          {lead && row.status !== 'LOCKED' ? <Button size="small" onClick={async () => { const note = window.prompt('问题说明') || ''; if (!note.trim()) return; try { await api(`/daily-stats/${row.id}/report`, { method: 'POST', json: { note } }); message.success('已上报问题行'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有上报'); } }}>上报问题行</Button> : null}
-          {lead && row.status !== 'LOCKED' ? <Button size="small" onClick={async () => { const reason = window.prompt('强制发布原因') || ''; if (!reason.trim()) return; try { await api(`/daily-stats/${row.id}/force-publish`, { method: 'POST', json: { reason } }); message.success('已强制发布'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有发布'); } }}>强制发布</Button> : null}
+          <Button size="small" disabled={viewOnly} onClick={async () => { try { await api(`/daily-stats/${row.id}/review`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有复核'); } }}>复核</Button>
+          <Button size="small" disabled={viewOnly} onClick={async () => { try { await api(`/daily-stats/${row.id}/lock`, { method: 'POST' }); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有锁定'); } }}>锁定</Button>
+          {(lead || viewOnly) && row.status !== 'LOCKED' ? <Button size="small" disabled={viewOnly} onClick={async () => { const note = window.prompt('问题说明') || ''; if (!note.trim()) return; try { await api(`/daily-stats/${row.id}/report`, { method: 'POST', json: { note } }); message.success('已上报问题行'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有上报'); } }}>上报问题行</Button> : null}
+          {(lead || viewOnly) && row.status !== 'LOCKED' ? <Button size="small" disabled={viewOnly} onClick={async () => { const reason = window.prompt('强制发布原因') || ''; if (!reason.trim()) return; try { await api(`/daily-stats/${row.id}/force-publish`, { method: 'POST', json: { reason } }); message.success('已强制发布'); load(); } catch (err) { message.error(err instanceof Error ? err.message : '没有发布'); } }}>强制发布</Button> : null}
         </Space> },
       ]} />
     </div>
@@ -398,6 +403,7 @@ export function DailyPage() {
 }
 
 export function WatermarksPage() {
+  const { user } = useAuth();
   const { message } = App.useApp();
   const [rows, setRows] = useState<any[]>([]);
   const [platforms, setPlatforms] = useState<any[]>([]);
@@ -426,7 +432,7 @@ export function WatermarksPage() {
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有生成'); }
           return false;
-        }}><Button type="primary">上传并生成水印</Button></Upload>
+        }}><Button type="primary" disabled={user?.role === 'ADMIN'}>上传并生成水印</Button></Upload>
       </Space>
       <div className="poster-grid">
         {rows.map((shot) => (
@@ -446,7 +452,7 @@ export function PlatformsPage() {
   const { message } = App.useApp();
   const [rows, setRows] = useState<any[]>([]);
   const admin = user?.role === 'ADMIN';
-  const canConfirmFirst = admin || user?.role === 'OPS_MANAGER';
+  const canConfirmFirst = user?.role === 'OPS_MANAGER';
   const load = () => api<any[]>('/platforms').then(setRows);
   useEffect(() => { load(); }, []);
   return (

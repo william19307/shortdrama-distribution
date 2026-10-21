@@ -39,7 +39,7 @@ export function ContractsPage() {
             render: (_: unknown, row: Contract) => user && user.role !== 'CLIENT' ? (
               <Space>
                 {['APPLYING', 'DRAFTING', 'PENDING_SIGN', 'EFFECTIVE'].map((status) => (
-                  <Button key={status} size="small" onClick={async () => { await api(`/contracts/${row.id}`, { method: 'PATCH', json: { status } }); load(); }}>{status === row.status ? '当前' : status === 'DRAFTING' ? '起草' : status === 'PENDING_SIGN' ? '待签' : status === 'EFFECTIVE' ? '生效' : ''}</Button>
+                  <Button key={status} size="small" disabled={user.role === 'ADMIN'} onClick={async () => { await api(`/contracts/${row.id}`, { method: 'PATCH', json: { status } }); load(); }}>{status === row.status ? '当前' : status === 'DRAFTING' ? '起草' : status === 'PENDING_SIGN' ? '待签' : status === 'EFFECTIVE' ? '生效' : ''}</Button>
                 )).filter((node) => node.props.children)}
               </Space>
             ) : null,

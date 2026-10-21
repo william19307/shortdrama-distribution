@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { platformCreateSchema, platformPatchSchema, settingsSchema, userCreateSchema, userPatchSchema, pageSchema } from '@shortform/shared';
 import { assertFound } from '../core/access';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser, nextCode } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser, nextCode } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 import { SettingsService } from '../core/settings.service';
 
@@ -105,13 +105,10 @@ export class AdminService {
   async patchPlatform(user: AuthUser, id: string, input: z.infer<typeof platformPatchSchema>) {
     assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN', 'BD']);
     const platform = assertFound(await this.prisma.platform.findUnique({ where: { id } }));
-    const canConfirmFirst = user.role === 'ADMIN' || user.role === 'OPS_MANAGER';
-    if (input.firstBatch != null && input.firstBatch !== platform.firstBatch && !canConfirmFirst) {
-      throw new ForbiddenException('首发名单由运营主管或管理员确认');
-    }
-    if (input.enabled != null && input.enabled !== platform.enabled && platform.firstBatch && !canConfirmFirst) {
-      throw new ForbiddenException('首发平台的启停由运营主管或管理员确认');
-    }
+    const rosterChange = (input.firstBatch != null && input.firstBatch !== platform.firstBatch) || (input.enabled != null && input.enabled !== platform.enabled);
+    if (rosterChange) assertBusinessWrite(user);
+    const firstBatchTouch = (input.firstBatch != null && input.firstBatch !== platform.firstBatch) || (input.enabled != null && input.enabled !== platform.enabled && platform.firstBatch);
+    if (firstBatchTouch && user.role !== 'OPS_MANAGER') throw new ForbiddenException('首发名单和首发平台启停由运营主管确认');
     const enabled = input.enabled ?? platform.enabled;
     const firstBatch = input.firstBatch ?? platform.firstBatch;
     if (platform.firstBatch && platform.enabled && !(enabled && firstBatch)) {

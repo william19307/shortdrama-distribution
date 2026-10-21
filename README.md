@@ -25,7 +25,7 @@ docker compose up -d --build
 | ops-manager@studio.example | 运营主管 · 孙悦 | 全部客户。分成复核、分派、扩大抽检、问题行上报 |
 | bd@studio.example | 商务 · 陈宇 | 只看负责的星河、青柠。上架结果。看不到结算单、提款单和保底 |
 | finance@studio.example | 财务 · 赵倩 | 认证、结算复核、提款、发票、打款、汇率。没有合同、视频库和分成菜单 |
-| admin@studio.example | 管理员 · 周岚 | 全部运营菜单：结算复核、汇率、数据同步、合同，以及员工和全局参数 |
+| admin@studio.example | 管理员 · 周岚 | 能打开全部运营页面，业务按钮只读。可改员工角色、汇率、提款门槛、结算周期、同步日期 |
 
 ## 公测启动说明
 
@@ -100,7 +100,7 @@ pnpm dev:web                  # http://localhost:5173
 | ops-manager@studio.example | 运营主管 · 孙悦 | 分成复核、审核分派、扩大抽检、问题行上报、汇率 |
 | bd@studio.example | 商务 · 陈宇 | 只看负责的星河和青柠，没有结算和保底 |
 | finance@studio.example | 财务 · 赵倩 | 客户认证、结算复核、提款发票打款、汇率 |
-| admin@studio.example | 管理员 · 周岚 | 结算复核、汇率、数据同步、合同，以及员工、全局参数、日志 |
+| admin@studio.example | 管理员 · 周岚 | 页面都可见。合同、审核、分成、数据录入返回 403。可改账号角色、汇率、提款门槛、结算周期、同步日期 |
 
 开发环境下登录页会列出这些账号。
 

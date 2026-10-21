@@ -4,7 +4,7 @@ import type { z } from 'zod';
 import { bankAccountSchema, certReviewSchema, certSchema, ownerPatchSchema, pageSchema } from '@shortform/shared';
 import { assertCompanyAccess, assertFound, maskAccount } from '../core/access';
 import { AuditService } from '../core/audit.service';
-import { assertRole, AuthUser } from '../core/auth';
+import { assertBusinessWrite, assertRole, AuthUser } from '../core/auth';
 import { PrismaService } from '../core/prisma.service';
 
 type CertInput = z.infer<typeof certSchema>;
@@ -89,7 +89,8 @@ export class CompanyService {
   }
 
   async reviewCert(user: AuthUser, id: string, input: z.infer<typeof certReviewSchema>) {
-    assertRole(user, ['FINANCE', 'ADMIN'], '企业认证由财务审核');
+    assertBusinessWrite(user);
+    assertRole(user, ['FINANCE'], '企业认证由财务审核');
     const company = assertFound(await this.prisma.company.findUnique({ where: { id } }));
     if (!input.pass && !input.reason) throw new BadRequestException('驳回时请填写原因');
     if (company.certStatus === 'CHANGE_PENDING') {
@@ -123,7 +124,8 @@ export class CompanyService {
   }
 
   async setOwner(user: AuthUser, id: string, input: z.infer<typeof ownerPatchSchema>) {
-    assertRole(user, ['ADMIN']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '负责运营由运营主管指定');
     if (input.ownerId) {
       const owner = await this.prisma.user.findUnique({ where: { id: input.ownerId } });
       if (!owner || owner.role !== 'OPS') throw new BadRequestException('负责人必须是运营账号');
@@ -134,7 +136,8 @@ export class CompanyService {
   }
 
   async setBd(user: AuthUser, id: string, bdId: string | null) {
-    assertRole(user, ['ADMIN', 'OPS_MANAGER']);
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS_MANAGER'], '负责商务由运营主管指定');
     if (bdId) {
       const bd = await this.prisma.user.findUnique({ where: { id: bdId } });
       if (!bd || bd.role !== 'BD' || bd.disabled) throw new BadRequestException('负责商务必须是在岗商务账号');
