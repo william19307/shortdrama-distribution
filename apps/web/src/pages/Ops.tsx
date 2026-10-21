@@ -652,8 +652,10 @@ export function PlatformsPage() {
     <div>
       <PageHead title="平台名单" hint="初始首批是 ReelShort、DramaBox、ShortMax、FlexTV、GoodShort。增删首批要主管确认。数据日调整从次日起生效。" />
       <Table rowKey="id" dataSource={rows} pagination={false} columns={[
-        { title: '标志', dataIndex: 'logoUrl', width: 160, render: (url: string | null, row) => <Space>
-          {url ? <img src={url} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} /> : <span style={{ color: 'var(--ds-text-3)' }}>无</span>}
+        { title: '标志', dataIndex: 'logoUrl', width: 148, render: (url: string | null, row) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ width: 28, height: 28, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ds-text-3)', flex: 'none' }}>
+            {url ? <img src={url} alt="" style={{ width: 28, height: 28, objectFit: 'contain' }} /> : '无'}
+          </span>
           <Upload showUploadList={false} accept="image/png,image/jpeg,image/webp" beforeUpload={async (file) => {
             try {
               const body = new FormData();
@@ -663,8 +665,8 @@ export function PlatformsPage() {
               load();
             } catch (err) { message.error(err instanceof Error ? err.message : '没有上传'); }
             return false;
-          }}><Button size="small">上传</Button></Upload>
-        </Space> },
+          }}><Button size="small" autoInsertSpace={false} style={{ letterSpacing: 0, paddingInline: 8 }}><span style={{ letterSpacing: 0 }}>上传</span></Button></Upload>
+        </span> },
         { title: '平台', dataIndex: 'name' },
         { title: '地区', dataIndex: 'region' },
         { title: '数据日', dataIndex: 'syncLag', render: (value, row) => <Space>{canEditLag ? <Select size="small" value={value} options={[{ value: 'T1', label: '昨天' }, { value: 'T2', label: '前天' }]} onChange={async (syncLag) => { await api(`/platforms/${row.id}`, { method: 'PATCH', json: { syncLag } }); message.success('数据日次日生效'); load(); }} /> : labelOf(value)}{row.syncLagPending ? <Tag>{labelOf(row.syncLagPending)} 次日生效</Tag> : null}</Space> },
