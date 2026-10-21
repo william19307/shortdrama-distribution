@@ -41,7 +41,7 @@ docker compose up -d --build
 已知限制，公测演示接受、不要当成故障：
 
 - 不向海外平台推送成片，不做转码、翻译、邮件、短信、电子签、子账号。
-- 没有 Excel 一键导入、文件夹自动匹配、保存视图。
+- 没有文件夹自动匹配、保存视图。报表可以上传 xlsx，问题行会标出，主管可以强制发布。
 - 结算金额是人手填写的人民币，系统不算结转。每天 01:00（`CRON_ST02`）按周期自动出单，页面上也可以批量生成。演示时管理员可 `POST /api/admin/jobs/settlement-generate/run`。
 - 上传失败可以重试已确认的分片，没有单独的断点续传队列。
 - 演示数据在容器卷里。`docker compose -f docker-compose.demo.yml --env-file .env.demo down -v` 会清掉数据。
@@ -163,7 +163,6 @@ apps/design-system
 
 这些留在后续，不在本次本地 MVP 里：
 
-- 报表 Excel 一键导入、字段映射和别名模糊匹配
 - 元数据 Excel、文件夹与剧集自动匹配
 - 浏览器里的持久上传队列（失败可以重试，不保留跨页面的队列）
 - ffprobe 成片探测

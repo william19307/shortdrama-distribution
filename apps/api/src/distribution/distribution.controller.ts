@@ -60,6 +60,11 @@ export class DistributionController {
     return this.distribution.decideEpisode(user, id, episodeId, body);
   }
 
+  @Get('reviews/sla-board')
+  slaBoard(@CurrentUser() user: AuthUser) {
+    return this.distribution.slaBoard(user);
+  }
+
   @Post('reviews/:id/assign')
   assign(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(z.object({ assigneeId: z.string().min(1) }))) body: { assigneeId: string }) {
     return this.distribution.assign(user, id, body.assigneeId);

@@ -14,6 +14,7 @@ import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
 import { StorageService } from '../core/storage.service';
 import { shanghaiStamp, stampImage } from './watermark';
@@ -92,13 +93,13 @@ export class MetricsService {
       viewMetricDef: input.viewMetricDef,
       uniqueViewers: input.uniqueViewers,
       paidUnlocks: input.paidUnlocks,
-      grossRevenue: input.grossRevenue ? new Prisma.Decimal(input.grossRevenue) : null,
-      netRevenue: input.netRevenue ? new Prisma.Decimal(input.netRevenue) : null,
+      grossRevenue: input.grossRevenue ? moneyDecimal(input.grossRevenue) : null,
+      netRevenue: input.netRevenue ? moneyDecimal(input.netRevenue) : null,
       currency: input.currency.toUpperCase(),
       shareRate: input.shareRate ? new Prisma.Decimal(input.shareRate) : null,
-      mgAmount: input.mgAmount ? new Prisma.Decimal(input.mgAmount) : null,
-      mgRecouped: input.mgRecouped ? new Prisma.Decimal(input.mgRecouped) : null,
-      revenueShareDue: input.revenueShareDue ? new Prisma.Decimal(input.revenueShareDue) : null,
+      mgAmount: input.mgAmount ? moneyDecimal(input.mgAmount) : null,
+      mgRecouped: input.mgRecouped ? moneyDecimal(input.mgRecouped) : null,
+      revenueShareDue: input.revenueShareDue ? moneyDecimal(input.revenueShareDue) : null,
       dealType: input.dealType,
       dataSource: input.dataSource,
       evidenceFiles: input.evidenceFiles ?? '',

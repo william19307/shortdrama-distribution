@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
-import { dailyListSchema, dailyStatSchema, forcePublishSchema, pageSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Put, Query, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { dailyListSchema, dailyStatSchema, forcePublishSchema, importMappingSchema, importMarkSchema, pageSchema, submitManagerSchema, ticketMessageSchema, watermarkAssignSchema, watermarkCreateSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
+import { ImportService } from './import.service';
 import { MetricsService } from './metrics.service';
 
 const ticketQuery = pageSchema.extend({ type: z.string().optional(), status: z.string().optional() });
@@ -10,7 +12,10 @@ const ticketQuery = pageSchema.extend({ type: z.string().optional(), status: z.s
 @Controller()
 @UseGuards(JwtAuthGuard)
 export class MetricsController {
-  constructor(private readonly metrics: MetricsService) {}
+  constructor(
+    private readonly metrics: MetricsService,
+    private readonly imports: ImportService,
+  ) {}
 
   @Get('dashboard')
   dashboard(@CurrentUser() user: AuthUser) {
@@ -30,6 +35,52 @@ export class MetricsController {
   @Post('daily-stats')
   saveDaily(@CurrentUser() user: AuthUser, @Body(new ZodPipe(dailyStatSchema)) body: z.infer<typeof dailyStatSchema>) {
     return this.metrics.saveDaily(user, body);
+  }
+
+  @Post('daily-stats/import')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
+  importUpload(@CurrentUser() user: AuthUser, @UploadedFile() file: Express.Multer.File, @Query('platformId') platformId?: string) {
+    return this.imports.upload(user, file, platformId);
+  }
+
+  @Get('daily-stats/import/:id')
+  importGet(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.imports.getBatch(user, id);
+  }
+
+  @Put('daily-stats/import/:id/mapping')
+  importMapping(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(importMappingSchema)) body: z.infer<typeof importMappingSchema>) {
+    return this.imports.putMapping(user, id, body);
+  }
+
+  @Post('daily-stats/import/:id/validate')
+  importValidate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.imports.validate(user, id);
+  }
+
+  @Post('daily-stats/import/:id/rows/:rowNo/mark')
+  importMark(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @Param('rowNo', ParseIntPipe) rowNo: number,
+    @Body(new ZodPipe(importMarkSchema)) body: z.infer<typeof importMarkSchema>,
+  ) {
+    return this.imports.markRow(user, id, rowNo, body.reason);
+  }
+
+  @Post('daily-stats/import/:id/publish')
+  importPublish(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.imports.publish(user, id);
+  }
+
+  @Post('daily-stats/import/:id/force-publish')
+  importForce(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(forcePublishSchema)) body: z.infer<typeof forcePublishSchema>) {
+    return this.imports.forcePublish(user, id, body);
+  }
+
+  @Post('daily-stats/import/:id/submit-manager')
+  importSubmit(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(submitManagerSchema)) body: z.infer<typeof submitManagerSchema>) {
+    return this.imports.submitManager(user, id, body);
   }
 
   @Post('daily-stats/:id/review')

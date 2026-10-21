@@ -4,7 +4,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { DEAL_TYPE_LABEL, DATA_SOURCE_LABEL, LISTING_LABEL, SHARE_MODE_LABEL } from '@shortform/shared';
-import { api, qs, uploadFile, type Page } from '../api';
+import { api, getToken, qs, uploadFile, type Page } from '../api';
 import { useAuth } from '../auth';
 import { ErrorNote, PageHead, PlatformChip, StatusTag, dayText, labelOf } from '../ui';
 
@@ -149,8 +149,13 @@ export function ReviewsPage() {
   const [status, setStatus] = useState<string>();
   const [reason, setReason] = useState('画面或字幕需要修改');
   const [error, setError] = useState('');
+  const [sla, setSla] = useState<{ summary: { total: number; warn80: number; overdue: number; double: number } } | null>(null);
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [status]);
+  useEffect(() => {
+    if (!user || !['OPS', 'OPS_MANAGER', 'ADMIN'].includes(user.role)) return;
+    api<typeof sla>('/reviews/sla-board').then(setSla).catch(() => undefined);
+  }, [user, rows]);
   useEffect(() => { if (id) api<Plan>(`/plans/${id}`).then(setPlan).catch((err) => setError(err.message)); }, [id]);
   useEffect(() => {
     if (!lead) return;
@@ -161,8 +166,14 @@ export function ReviewsPage() {
 
   return (
     <div>
-      <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。" />
+      <PageHead title="审核队列" hint="默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。可以扩大到全片。二轮且成片都已通过时，会直接进入分成。主管可以把待审单分派给专员。" />
       <ErrorNote error={error} />
+      {sla ? <Space wrap style={{ marginBottom: 12 }}>
+        <Tag>在审 {sla.summary.total}</Tag>
+        <Tag color="gold">80%预警 {sla.summary.warn80}</Tag>
+        <Tag color="orange">已超时 {sla.summary.overdue}</Tag>
+        <Tag color="red">2倍超时 {sla.summary.double}</Tag>
+      </Space> : null}
       <Tabs
         activeKey={status || 'ALL'}
         onChange={(value) => setStatus(value === 'ALL' ? undefined : value)}
@@ -334,6 +345,7 @@ export function DailyPage() {
   const [expect, setExpect] = useState<any[]>([]);
   const [error, setError] = useState('');
   const [page, setPage] = useState(1);
+  const [batch, setBatch] = useState<any>(null);
   const load = () => api<Page<any>>(`/daily-stats${qs({ page, pageSize: 20 })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [page]);
   useEffect(() => {
@@ -344,8 +356,54 @@ export function DailyPage() {
 
   return (
     <div>
-      <PageHead title="数据同步" hint="手工录入。每个平台要哪一天的数，由平台配置决定。草稿可以先存，复核前需要关联防伪截图。录入人不能复核自己的记录。问题行由运营主管上报。" />
+      <PageHead title="数据同步" hint="可以手工录入，也可以上传 Excel。校验后问题行会标出来。有问题行时专员提交主管，主管填写理由后强制发布，问题行不写入日报。" />
       <ErrorNote error={error} />
+      <Card size="small" title="报表导入" style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Upload accept=".xlsx" maxCount={1} showUploadList={false} disabled={viewOnly} beforeUpload={async (file) => {
+            try {
+              const body = new FormData();
+              body.append('file', file);
+              const headers = new Headers();
+              const token = getToken();
+              if (token) headers.set('Authorization', `Bearer ${token}`);
+              const res = await fetch('/api/daily-stats/import', { method: 'POST', headers, body });
+              const data = await res.json();
+              if (!res.ok) throw new Error(typeof data?.message === 'string' ? data.message : '没有导入');
+              const checked = await api<any>(`/daily-stats/import/${data.id}/validate`, { method: 'POST' });
+              setBatch(checked);
+              message.success(`已导入 ${checked.summary.total} 行，问题行 ${checked.summary.error}`);
+            } catch (err) { message.error(err instanceof Error ? err.message : '没有导入'); }
+            return false;
+          }}><Button disabled={viewOnly}>上传 Excel</Button></Upload>
+          {batch && batch.summary?.error ? <Button disabled={viewOnly} onClick={async () => {
+            const note = window.prompt('提交主管的说明') || '';
+            try { setBatch(await api(`/daily-stats/import/${batch.id}/submit-manager`, { method: 'POST', json: { note } })); message.success('已提交主管'); }
+            catch (err) { message.error(err instanceof Error ? err.message : '没有提交'); }
+          }}>提交主管</Button> : null}
+          {batch && lead ? <Button disabled={viewOnly} onClick={async () => {
+            const reason = window.prompt('强制发布原因') || '';
+            if (!reason.trim()) return;
+            try { setBatch(await api(`/daily-stats/import/${batch.id}/force-publish`, { method: 'POST', json: { reason } })); message.success('已强制发布'); load(); }
+            catch (err) { message.error(err instanceof Error ? err.message : '没有发布'); }
+          }}>强制发布</Button> : null}
+          {batch && !batch.summary?.error && batch.status !== 'PUBLISHED' && batch.status !== 'FORCE_PUBLISHED' ? <Button type="primary" disabled={viewOnly} onClick={async () => {
+            try { setBatch(await api(`/daily-stats/import/${batch.id}/publish`, { method: 'POST' })); message.success('已发布'); load(); }
+            catch (err) { message.error(err instanceof Error ? err.message : '没有发布'); }
+          }}>发布</Button> : null}
+        </Space>
+        {batch ? <Table style={{ marginTop: 12 }} size="small" rowKey="id" pagination={false} dataSource={batch.rows || []} columns={[
+          { title: '行', dataIndex: 'rowNo' },
+          { title: '状态', dataIndex: 'status' },
+          { title: '问题', dataIndex: 'errorReason', render: (value: string) => value || '—' },
+          { title: '', render: (_: unknown, row: { rowNo: number; status: string }) => row.status === 'PUBLISHED' || viewOnly ? null : <Button size="small" onClick={async () => {
+            const reason = window.prompt('问题说明') || '';
+            if (!reason.trim()) return;
+            try { setBatch(await api(`/daily-stats/import/${batch.id}/rows/${row.rowNo}/mark`, { method: 'POST', json: { reason } })); }
+            catch (err) { message.error(err instanceof Error ? err.message : '没有标记'); }
+          }}>标为问题行</Button> },
+        ]} /> : null}
+      </Card>
       <Space wrap style={{ marginBottom: 12 }}>{expect.map((item) => <Tag key={item.id}>{item.name} · {item.asOfLabel}</Tag>)}</Space>
       <Form layout="vertical" style={{ maxWidth: 880 }} onFinish={async (values) => {
         try {

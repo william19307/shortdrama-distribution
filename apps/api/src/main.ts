@@ -33,6 +33,7 @@ export async function buildApp() {
     if (req.method === 'PUT' && /\/api\/storage\/uploads\/[^/]+\/(content|parts\/\d+)$/.test(req.path)) {
       return raw({ type: () => true, limit: '2gb' })(req, res, next);
     }
+    if (req.is('multipart/form-data')) return next();
     return json({ limit: '4mb' })(req, res, next);
   });
   app.setGlobalPrefix('api');

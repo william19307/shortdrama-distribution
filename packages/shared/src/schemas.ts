@@ -13,7 +13,15 @@ import {
 } from './enums';
 
 const dateStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD');
-const decimalStr = z.string().regex(/^-?\d+(\.\d{1,2})?$/, '金额最多保留两位小数');
+
+function moneyText(value: unknown) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return value;
+  const text = value.toString();
+  if (!/e/i.test(text)) return text;
+  return value.toFixed(8).replace(/0+$/, '').replace(/\.$/, '');
+}
+
+const decimalStr = z.preprocess(moneyText, z.string().regex(/^-?\d+(\.\d{1,2})?$/, '金额最多保留两位小数'));
 const rateStr = z.string().regex(/^\d+(\.\d{1,4})?$/, '比例格式不正确');
 
 export const registerSchema = z.object({
@@ -255,6 +263,20 @@ export const spotCheckSchema = z.object({
 
 export const forcePublishSchema = z.object({
   reason: z.string().trim().min(1).max(1000),
+  excludeErrorRows: z.boolean().optional(),
+});
+
+export const submitManagerSchema = z.object({
+  note: z.string().max(1000).optional(),
+});
+
+export const importMappingSchema = z.object({
+  mapping: z.record(z.string()),
+  platformId: z.string().min(1).optional(),
+});
+
+export const importMarkSchema = z.object({
+  reason: z.string().trim().min(1).max(500),
 });
 
 export const policySchema = z.object({

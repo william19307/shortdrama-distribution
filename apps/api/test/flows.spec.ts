@@ -253,6 +253,10 @@ describe('核心流程', () => {
     expect(small.status).toBeLessThan(300);
     const badMoney = await authed(ops.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.123', internalNote: '三位小数' });
     expect(badMoney.status).toBe(400);
+    expect(JSON.stringify(badMoney.body)).toContain('两位小数');
+    const badNumber = await authed(ops.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: 100.129, internalNote: '数字三位小数' });
+    expect(badNumber.status).toBe(400);
+    expect(JSON.stringify(badNumber.body)).toContain('两位小数');
     const adminAmount = await authed(admin.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '管理员不能录入' });
     expect(adminAmount.status).toBe(403);
     const entered = await authed(ops.token).post(`/api/settlements/${small.body.id}/amount`).send({ amountCny: '100.00', internalNote: '手工应结，内部可见' });

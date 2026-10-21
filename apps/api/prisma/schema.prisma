@@ -211,6 +211,7 @@ model User {
   auditLogs      AuditLog[]
   tasks          AsyncTask[]
   notifications  Notification[]
+  importBatches  DailyImportBatch[]
 
   @@index([role])
   @@index([companyId])
@@ -289,6 +290,7 @@ model Platform {
   shares        ShareConfig[]
   dailyStats    DailyStat[]
   watermarks    WatermarkShot[]
+  importBatches DailyImportBatch[]
 
   @@index([firstBatch, enabled, sort])
 }
@@ -821,4 +823,59 @@ model ReviewSpotCheck {
   createdAt   DateTime        @default(now())
 
   @@index([planId, createdAt])
+}
+
+enum ImportBatchStatus {
+  UPLOADED
+  MAPPED
+  VALIDATED
+  PUBLISHED
+  FORCE_PUBLISHED
+  SUBMITTED_MANAGER
+}
+
+enum ImportRowStatus {
+  OK
+  ERROR
+  EXCLUDED
+  PUBLISHED
+}
+
+model DailyImportBatch {
+  id                   String            @id @default(cuid())
+  code                 String            @unique
+  platformId           String?
+  platform             Platform?         @relation(fields: [platformId], references: [id])
+  fileName             String
+  status               ImportBatchStatus @default(UPLOADED)
+  mapping              Json?
+  headers              Json?
+  forceReason          String?
+  managerNote          String?
+  createdById          String
+  createdBy            User              @relation(fields: [createdById], references: [id])
+  submittedToManagerAt DateTime?
+  publishedAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  rows                 DailyImportRow[]
+
+  @@index([createdById, createdAt])
+  @@index([status])
+}
+
+model DailyImportRow {
+  id          String           @id @default(cuid())
+  batchId     String
+  batch       DailyImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNo       Int
+  raw         Json
+  mapped      Json?
+  status      ImportRowStatus  @default(OK)
+  errorReason String           @default("")
+  dailyStatId String?
+  createdAt   DateTime         @default(now())
+
+  @@unique([batchId, rowNo])
+  @@index([batchId, status])
 }

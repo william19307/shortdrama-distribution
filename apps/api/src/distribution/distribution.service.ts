@@ -14,6 +14,8 @@ import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, shareDto } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { moneyDecimal } from '../core/money';
+import { jobScheduleFromEnv } from '../jobs/jobs.service';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
 
@@ -300,7 +302,7 @@ export class DistributionService {
             mode: item.mode,
             clientRate: rate,
             overRate: item.overRate ? new Prisma.Decimal(item.overRate) : null,
-            guaranteeAmount: item.mode === 'NO_MG' ? null : new Prisma.Decimal(item.guaranteeAmount!),
+            guaranteeAmount: item.mode === 'NO_MG' ? null : moneyDecimal(item.guaranteeAmount!),
             guaranteeCurrency: item.mode === 'NO_MG' ? null : item.guaranteeCurrency || 'CNY',
             guaranteePeriodDays: item.mode === 'NO_MG' ? null : item.guaranteePeriodDays,
             reviewStatus: 'PENDING',
@@ -310,7 +312,7 @@ export class DistributionService {
             mode: item.mode,
             clientRate: rate,
             overRate: item.overRate ? new Prisma.Decimal(item.overRate) : null,
-            guaranteeAmount: item.mode === 'NO_MG' ? null : new Prisma.Decimal(item.guaranteeAmount!),
+            guaranteeAmount: item.mode === 'NO_MG' ? null : moneyDecimal(item.guaranteeAmount!),
             guaranteeCurrency: item.mode === 'NO_MG' ? null : item.guaranteeCurrency || 'CNY',
             guaranteePeriodDays: item.mode === 'NO_MG' ? null : item.guaranteePeriodDays,
             reviewStatus: 'PENDING',
@@ -425,6 +427,64 @@ export class DistributionService {
     return plan;
   }
 
+  async slaBoard(user: AuthUser) {
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN']);
+    const limits = jobScheduleFromEnv();
+    const where: Prisma.DistributionPlanWhereInput = {
+      status: { in: ['PENDING_ASSIGN', 'PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] },
+      slaDueAt: { not: null },
+    };
+    if (user.role === 'OPS') where.assigneeId = user.id;
+    const plans = await this.prisma.distributionPlan.findMany({
+      where,
+      include: {
+        company: { select: { id: true, name: true } },
+        drama: { select: { id: true, title: true, code: true } },
+      },
+      orderBy: { slaDueAt: 'asc' },
+    });
+    const now = Date.now();
+    const items = plans.map((plan) => {
+      const tier = slaTier(plan.submittedAt, plan.slaDueAt, now, limits.slaWarnRatio, limits.slaDoubleRatio);
+      return {
+        id: plan.id,
+        code: plan.code,
+        status: plan.status,
+        assigneeId: plan.assigneeId,
+        company: plan.company,
+        drama: plan.drama,
+        submittedAt: plan.submittedAt,
+        slaDueAt: plan.slaDueAt,
+        elapsedRatio: tier.ratio,
+        tier: tier.tier,
+        tierLabel: tier.label,
+      };
+    });
+    const byAssignee = new Map<string, { assigneeId: string | null; total: number; warn80: number; overdue: number; double: number }>();
+    for (const item of items) {
+      const key = item.assigneeId ?? '_unassigned';
+      const row = byAssignee.get(key) ?? { assigneeId: item.assigneeId, total: 0, warn80: 0, overdue: 0, double: 0 };
+      row.total += 1;
+      if (item.tier === 'warn80') row.warn80 += 1;
+      if (item.tier === 'overdue') row.overdue += 1;
+      if (item.tier === 'double') row.double += 1;
+      byAssignee.set(key, row);
+    }
+    return {
+      summary: {
+        total: items.length,
+        ok: items.filter((item) => item.tier === 'ok').length,
+        warn80: items.filter((item) => item.tier === 'warn80').length,
+        overdue: items.filter((item) => item.tier === 'overdue').length,
+        double: items.filter((item) => item.tier === 'double').length,
+      },
+      warnRatio: limits.slaWarnRatio,
+      doubleRatio: limits.slaDoubleRatio,
+      byAssignee: [...byAssignee.values()],
+      items,
+    };
+  }
+
   private assertReviewer(user: AuthUser, plan: { assigneeId: string | null; company: { id: string; ownerId: string | null } }) {
     assertBusinessWrite(user);
     if (user.role === 'OPS_MANAGER') return;
@@ -476,6 +536,16 @@ export class DistributionService {
       update: { body: plain },
     });
   }
+}
+
+function slaTier(submittedAt: Date | null, slaDueAt: Date | null, now: number, warnRatio: number, doubleRatio: number) {
+  if (!slaDueAt || !submittedAt) return { tier: 'ok' as const, label: '正常', ratio: 0 };
+  const span = Math.max(slaDueAt.getTime() - submittedAt.getTime(), 1);
+  const ratio = (now - submittedAt.getTime()) / span;
+  if (ratio >= doubleRatio) return { tier: 'double' as const, label: '2倍超时', ratio };
+  if (now >= slaDueAt.getTime()) return { tier: 'overdue' as const, label: '已超时', ratio };
+  if (ratio >= warnRatio) return { tier: 'warn80' as const, label: '已用80%', ratio };
+  return { tier: 'ok' as const, label: '正常', ratio };
 }
 
 export const planListSchema = pageSchema.extend({

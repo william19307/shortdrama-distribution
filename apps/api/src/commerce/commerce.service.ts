@@ -6,6 +6,7 @@ import { assertCompanyAccess, assertFound } from '../core/access';
 import { hidesCommercialTerms, settlementLineDto, stripCommercialKeys } from '../core/viewer-dto';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { moneyDecimal } from '../core/money';
 import { PrismaService } from '../core/prisma.service';
 import { SettingsService } from '../core/settings.service';
 import { StorageService } from '../core/storage.service';
@@ -305,9 +306,9 @@ export class CommerceService {
       throw new BadRequestException('结算单已进入提款流程，不能直接改金额');
     }
     if (row.status !== 'PENDING_ENTRY' && !input.reason) throw new BadRequestException('修改已有金额时请填写原因');
-    const amount = new Prisma.Decimal(input.amountCny);
+    const amount = moneyDecimal(input.amountCny);
     if (input.lines?.length) {
-      const sum = input.lines.reduce((acc, line) => acc.plus(line.amountCny), new Prisma.Decimal(0));
+      const sum = input.lines.reduce((acc, line) => acc.plus(moneyDecimal(line.amountCny)), new Prisma.Decimal(0));
       if (!sum.equals(amount)) throw new BadRequestException('分行金额合计需要等于应结金额');
     }
     const settings = await this.settings.all();
@@ -329,7 +330,7 @@ export class CommerceService {
       });
       if (input.lines) {
         for (const line of input.lines) {
-          await tx.settlementLine.updateMany({ where: { id: line.lineId, settlementId: id }, data: { lineAmountCny: new Prisma.Decimal(line.amountCny) } });
+          await tx.settlementLine.updateMany({ where: { id: line.lineId, settlementId: id }, data: { lineAmountCny: moneyDecimal(line.amountCny) } });
         }
       }
       await tx.settlementLog.create({
