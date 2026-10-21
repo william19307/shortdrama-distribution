@@ -35,8 +35,11 @@ export function LibraryPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
+  const [filterCount, setFilterCount] = useState<number | null>(null);
   const [notice, setNotice] = useState('');
   const [folder, setFolder] = useState<{ title: string; episodes: { no: number; fileName: string }[]; cover?: string; poster?: string; trailer?: string; subtitles: string[]; conflicts: string[] }[] | null>(null);
+  const [metaFile, setMetaFile] = useState<File | null>(null);
+  const [metaRows, setMetaRows] = useState<{ rowNo: number; ok: boolean; error: string; title?: string; action?: string }[] | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -47,6 +50,10 @@ export function LibraryPage() {
   };
 
   useEffect(() => { load(); }, [q, phase, page]);
+  useEffect(() => { setFilterCount(null); }, [q, phase]);
+
+  const filter = { q: q || undefined, phase };
+  const wholeFilter = filterCount != null && selected.length === filterCount;
 
   return (
     <div>
@@ -69,11 +76,11 @@ export function LibraryPage() {
             const body = new FormData();
             body.append('file', file);
             try {
-              const res = await api<{ applied: number; failed: number; rows: { rowNo: number; error: string }[] }>('/dramas/metadata-import', { method: 'POST', body });
-              setNotice(`元数据已导入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}`);
-              if (res.failed) setError(res.rows.filter((row) => row.error).map((row) => row.error).join('；'));
-              load();
-            } catch (err) { setError(err instanceof Error ? err.message : '没有导入'); }
+              const res = await api<{ ready: number; failed: number; rows: { rowNo: number; ok: boolean; error: string; title?: string; action?: string }[] }>('/library/metadata-import', { method: 'POST', body });
+              setMetaFile(file);
+              setMetaRows(res.rows);
+              setNotice(`预览 ${res.ready} 行可导入${res.failed ? `，${res.failed} 行有误` : ''}。确认后才会写入。`);
+            } catch (err) { setError(err instanceof Error ? err.message : '没有读到表格'); }
             return false;
           }}><Button>导入元数据</Button></Upload>
         </Space>
@@ -97,6 +104,38 @@ export function LibraryPage() {
           </div>
         ))}
       </Modal>
+      {metaRows ? (
+        <div style={{ marginBottom: 16, padding: 16, border: '1px solid var(--ds-line, #e5e5e5)', borderRadius: 12 }}>
+          <b>元数据导入预览</b>
+          <p style={{ color: 'var(--ds-text-2)' }}>还没有写入。确认后按预览结果导入，有误的行会跳过。</p>
+          <Table
+            size="small"
+            rowKey="rowNo"
+            pagination={false}
+            dataSource={metaRows}
+            columns={[
+              { title: '行', dataIndex: 'rowNo', width: 70 },
+              { title: '剧名', dataIndex: 'title', render: (value: string) => value || '—' },
+              { title: '结果', render: (_: unknown, row: { ok: boolean; action?: string; error: string }) => row.ok ? (row.action || '可导入') : row.error },
+            ]}
+          />
+          <Space style={{ marginTop: 12 }}>
+            <Button type="primary" onClick={async () => {
+              if (!metaFile) return;
+              const body = new FormData();
+              body.append('file', metaFile);
+              try {
+                const res = await api<{ applied: number; failed: number }>('/library/metadata-import/confirm', { method: 'POST', body });
+                setNotice(`元数据已导入 ${res.applied} 行${res.failed ? `，${res.failed} 行有误` : ''}`);
+                setMetaRows(null);
+                setMetaFile(null);
+                load();
+              } catch (err) { setError(err instanceof Error ? err.message : '没有导入'); }
+            }}>确认导入</Button>
+            <Button onClick={() => { setMetaRows(null); setMetaFile(null); }}>取消</Button>
+          </Space>
+        </div>
+      ) : null}
       <Space wrap style={{ marginBottom: 16 }}>
         <Input.Search allowClear placeholder="剧名、外文名或编号" style={{ width: 260 }} onSearch={(value) => { setPage(1); setQ(value); }} />
         <Select
@@ -116,7 +155,7 @@ export function LibraryPage() {
               <div className="poster-grid">
                 {data.items.map((drama) => (
                   <motion.button key={drama.id} className="ds-poster" style={{ position: 'relative' }} onClick={() => nav(`/dramas/${drama.id}`)} {...motionTokens.presets.cardHover}>
-                    <Checkbox checked={selected.includes(drama.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => setSelected((cur) => event.target.checked ? [...new Set([...cur, drama.id])] : cur.filter((id) => id !== drama.id))} style={{ position: 'absolute', zIndex: 2, left: 8, top: 8 }} />
+                    <Checkbox checked={selected.includes(drama.id)} onClick={(event) => event.stopPropagation()} onChange={(event) => { setFilterCount(null); setSelected((cur) => event.target.checked ? [...new Set([...cur, drama.id])] : cur.filter((id) => id !== drama.id)); }} style={{ position: 'absolute', zIndex: 2, left: 8, top: 8 }} />
                     {drama.coverUrl ? <img src={drama.coverUrl} alt="" /> : null}
                     <div className="ds-poster__art" style={{ background: drama.coverUrl ? 'var(--ds-grad-bar)' : 'var(--ds-grad-bento)' }}>
                       <div className="ds-poster__kicker">{drama.code}</div>
@@ -140,7 +179,7 @@ export function LibraryPage() {
               rowKey="id"
               loading={loading}
               dataSource={data?.items || []}
-              rowSelection={{ selectedRowKeys: selected, onChange: (keys) => setSelected(keys.map(String)) }}
+              rowSelection={{ selectedRowKeys: selected, onChange: (keys) => { setFilterCount(null); setSelected(keys.map(String)); } }}
               pagination={{ current: page, pageSize: 24, total: data?.total || 0, onChange: setPage, showSizeChanger: false }}
               onRow={(row) => ({ onClick: () => nav(`/dramas/${row.id}`), style: { cursor: 'pointer' } })}
               columns={[
@@ -166,27 +205,47 @@ export function LibraryPage() {
           )}
         </motion.div>
       </AnimatePresence>
-      {selected.length ? (
+      {data?.total || selected.length ? (
         <div style={{ position: 'fixed', zIndex: 20, left: 24, right: 24, bottom: 24, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '12px 16px', background: 'var(--ds-bg-elevated, #fff)', border: '1px solid var(--ds-line, #e5e5e5)', borderRadius: 12, boxShadow: '0 8px 24px rgba(0,0,0,.12)' }}>
           <b>已选 {selected.length}</b>
           <Button onClick={async () => {
-            const all = await api<{ ids: string[]; total: number }>('/dramas/selection', { method: 'POST', json: { q: q || undefined, phase } });
-            setSelected(all.ids);
-            setNotice(`已选中全部筛选结果 ${all.total} 部`);
-          }}>选中全部筛选结果（共 {data?.total || 0} 部）</Button>
-          {client ? <Button type="primary" onClick={async () => {
             try {
-              const res = await api<{ submittedCount: number; needsActionCount: number; needsAction: { title: string; reason: string }[] }>('/plans/batch', { method: 'POST', json: { dramaIds: selected, round: 'FIRST' } });
+              const all = await api<{ ids: string[]; total: number; overLimit: boolean; message: string }>('/library/selection/preview', { method: 'POST', json: { filter, action: 'EXPORT' } });
+              if (all.overLimit) { setNotice(all.message); setFilterCount(null); return; }
+              setSelected(all.ids);
+              setFilterCount(all.total);
+              setNotice(`已选中全部筛选结果 ${all.total} 部`);
+            } catch (err) { setError(err instanceof Error ? err.message : '没有选中'); }
+          }}>选中全部筛选结果（共 {data?.total || 0} 部）</Button>
+          {client ? <Button type="primary" disabled={!selected.length} onClick={async () => {
+            try {
+              const res = wholeFilter
+                ? await api<{ submittedCount: number; needsActionCount: number; needsAction: { title: string; reason: string }[] }>('/library/selection/execute', { method: 'POST', json: { filter, action: 'PLAN', expectedCount: selected.length, params: { round: 'FIRST' } } })
+                : await api<{ submittedCount: number; needsActionCount: number; needsAction: { title: string; reason: string }[] }>('/plans/batch', { method: 'POST', json: { dramaIds: selected, round: 'FIRST' } });
               setNotice(`已提交 ${res.submittedCount} 部，${res.needsActionCount} 部需处理${res.needsAction[0] ? `：${res.needsAction[0].reason}` : ''}。已记入任务中心`);
             } catch (err) { setError(err instanceof Error ? err.message : '没有提交'); }
           }}>申请发行</Button> : null}
-          <Button onClick={async () => { const tag = window.prompt('标签') || ''; if (!tag) return; await api('/dramas/batch', { method: 'POST', json: { ids: selected, tag } }); setNotice('已打标签'); }}>打标签</Button>
-          <Button onClick={async () => { const group = window.prompt('分组') || ''; if (!group) return; await api('/dramas/batch', { method: 'POST', json: { ids: selected, group } }); setNotice('已加入分组'); }}>加入分组</Button>
-          <Button onClick={async () => {
+          <Button disabled={!selected.length} onClick={async () => {
+            const tag = window.prompt('标签') || '';
+            if (!tag) return;
+            if (wholeFilter) await api('/library/selection/execute', { method: 'POST', json: { filter, action: 'TAG', expectedCount: selected.length, params: { add: [tag] } } });
+            else await api('/dramas/batch', { method: 'POST', json: { ids: selected, tag } });
+            setNotice('已打标签');
+          }}>打标签</Button>
+          <Button disabled={!selected.length} onClick={async () => {
+            const group = window.prompt('分组') || '';
+            if (!group) return;
+            if (wholeFilter) await api('/library/selection/execute', { method: 'POST', json: { filter, action: 'GROUP', expectedCount: selected.length, params: { add: [group] } } });
+            else await api('/dramas/batch', { method: 'POST', json: { ids: selected, group } });
+            setNotice('已加入分组');
+          }}>加入分组</Button>
+          <Button disabled={!selected.length} onClick={async () => {
             const headers = new Headers({ 'Content-Type': 'application/json' });
             const token = getToken();
             if (token) headers.set('Authorization', `Bearer ${token}`);
-            const res = await fetch('/api/dramas/export', { method: 'POST', headers, body: JSON.stringify({ ids: selected, q: q || undefined, phase }) });
+            const res = wholeFilter
+              ? await fetch('/api/library/selection/export', { method: 'POST', headers, body: JSON.stringify({ filter, expectedCount: selected.length }) })
+              : await fetch('/api/dramas/export', { method: 'POST', headers, body: JSON.stringify({ ids: selected, q: q || undefined, phase }) });
             if (!res.ok) { setError('导出失败'); return; }
             const blob = await res.blob();
             const url = URL.createObjectURL(blob);
@@ -196,7 +255,7 @@ export function LibraryPage() {
             a.click();
             URL.revokeObjectURL(url);
           }}>导出</Button>
-          <Button onClick={() => { setSelected([]); setNotice(''); }}>取消</Button>
+          <Button onClick={() => { setSelected([]); setFilterCount(null); setNotice(''); }}>取消</Button>
           {notice ? <span style={{ color: 'var(--ds-text-3)' }}>{notice}</span> : null}
         </div>
       ) : null}

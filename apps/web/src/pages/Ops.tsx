@@ -158,12 +158,16 @@ export function ReviewsPage() {
   const [error, setError] = useState('');
   const [picked, setPicked] = useState<string[]>([]);
   const [batchNote, setBatchNote] = useState('');
+  const [reasons, setReasons] = useState<{ code: string; title: string }[]>([]);
+  const [reasonCode, setReasonCode] = useState<string>();
+  const [rejectNote, setRejectNote] = useState('');
   const [sla, setSla] = useState<{ summary: { total: number; warn80: number; overdue: number; double: number } } | null>(null);
   const load = () => api<Page<Plan>>(`/plans${qs({ page: 1, pageSize: 50, status })}`).then(setRows).catch((err) => setError(err.message));
   useEffect(() => { load(); }, [status]);
   useEffect(() => {
     if (!user || !['OPS', 'OPS_MANAGER', 'ADMIN'].includes(user.role)) return;
     api<typeof sla>('/reviews/sla-board').then(setSla).catch(() => undefined);
+    api<{ code: string; title: string }[]>('/reject-reasons').then(setReasons).catch(() => undefined);
   }, [user, rows]);
   useEffect(() => { if (id) api<Plan>(`/plans/${id}`).then(setPlan).catch((err) => setError(err.message)); }, [id]);
   useEffect(() => {
@@ -175,7 +179,7 @@ export function ReviewsPage() {
 
   return (
     <div>
-      <PageHead title="审核队列" hint="新客户前 3 部剧全审。之后默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。批量通过的结果记在任务中心。" />
+      <PageHead title="审核队列" hint="新客户前 3 部剧全审。之后默认抽检：8 集及以内全看，更长的剧看开头、结尾和中间样本。批量通过和批量驳回的结果记在任务中心。" />
       <ErrorNote error={error} />
       {picked.length ? <Space wrap style={{ marginBottom: 12 }}>
         <b>已选 {picked.length}</b>
@@ -187,6 +191,23 @@ export function ReviewsPage() {
             load();
           } catch (err) { message.error(err instanceof Error ? err.message : '没有通过'); }
         }}>批量通过</Button>
+        <Select
+          style={{ width: 180 }}
+          placeholder="驳回原因"
+          disabled={viewOnly}
+          value={reasonCode}
+          options={reasons.map((item) => ({ value: item.code, label: item.title }))}
+          onChange={setReasonCode}
+        />
+        <Input style={{ width: 220 }} placeholder="补充说明（其他时必填）" value={rejectNote} onChange={(event) => setRejectNote(event.target.value)} />
+        <Button danger disabled={viewOnly || !reasonCode} onClick={async () => {
+          try {
+            const res = await api<{ rejectedCount: number; skippedCount: number; skipped: { reason: string }[] }>('/reviews/batch-reject', { method: 'POST', json: { items: picked.map((planId) => ({ planId })), reasonCode, note: rejectNote || undefined } });
+            setBatchNote(`驳回 ${res.rejectedCount} 部，跳过 ${res.skippedCount} 部。${res.skipped.map((item) => item.reason).join('；')} 已记入任务中心。`);
+            setPicked([]);
+            load();
+          } catch (err) { message.error(err instanceof Error ? err.message : '没有驳回'); }
+        }}>批量驳回</Button>
         {batchNote ? <span>{batchNote}</span> : null}
       </Space> : null}
       {sla ? <Space wrap style={{ marginBottom: 12 }}>
@@ -688,7 +709,7 @@ export function TasksPage() {
   useEffect(() => { load(); }, []);
   return (
     <div>
-      <PageHead title="任务中心" hint="批量通过、分成套用、批量申请、上架导入和应结导入都会记在这里。客户只看自己的任务，主管可以看团队任务。失败项可以单独重试，取消只停掉还没做的项。" />
+      <PageHead title="任务中心" hint="批量通过、批量驳回、分成套用、批量申请、上架导入和应结导入都会记在这里。客户只看自己的任务，主管可以看团队任务。失败项可以单独重试，取消只停掉还没做的项。" />
       <Table rowKey="id" dataSource={rows?.items || []} pagination={false} columns={[
         { title: '名称', dataIndex: 'name' },
         { title: '进度', dataIndex: 'progress', render: (value: number) => `${value || 0}%` },

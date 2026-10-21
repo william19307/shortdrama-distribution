@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Put, Query, StreamableFile, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { episodeDecisionSchema, listingPatchSchema, planBatchSchema, planCreateSchema, reviewBatchPassSchema, reviewReassignSchema, sharePutSchema, shareReviewSchema, shareTemplateApplySchema, shareTemplateSchema, spotCheckSchema } from '@shortform/shared';
+import { batchRejectSchema, episodeDecisionSchema, listingPatchSchema, planBatchSchema, planCreateSchema, rejectReasonPatchSchema, rejectReasonSchema, reviewBatchPassSchema, reviewReassignSchema, sharePutSchema, shareReviewSchema, shareTemplateApplySchema, shareTemplateSchema, spotCheckSchema } from '@shortform/shared';
 import { z } from 'zod';
 import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
 import { ZodPipe } from '../core/zod.pipe';
@@ -54,6 +54,26 @@ export class DistributionController {
   @Post('reviews/batch-pass')
   batchPass(@CurrentUser() user: AuthUser, @Body(new ZodPipe(reviewBatchPassSchema)) body: z.infer<typeof reviewBatchPassSchema>) {
     return this.distribution.batchPass(user, body.planIds);
+  }
+
+  @Get('reject-reasons')
+  reasons(@CurrentUser() user: AuthUser) {
+    return this.distribution.listRejectReasons(user);
+  }
+
+  @Post('reject-reasons')
+  createReason(@CurrentUser() user: AuthUser, @Body(new ZodPipe(rejectReasonSchema)) body: z.infer<typeof rejectReasonSchema>) {
+    return this.distribution.createRejectReason(user, body);
+  }
+
+  @Patch('reject-reasons/:id')
+  patchReason(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(rejectReasonPatchSchema)) body: z.infer<typeof rejectReasonPatchSchema>) {
+    return this.distribution.updateRejectReason(user, id, body);
+  }
+
+  @Post('reviews/batch-reject')
+  batchReject(@CurrentUser() user: AuthUser, @Body(new ZodPipe(batchRejectSchema)) body: z.infer<typeof batchRejectSchema>) {
+    return this.distribution.batchReject(user, body);
   }
 
   @Get('share-templates')

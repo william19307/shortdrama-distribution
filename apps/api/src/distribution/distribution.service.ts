@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import {
@@ -20,6 +20,7 @@ import { jobScheduleFromEnv } from '../jobs/jobs.service';
 import { toPlain } from '../core/plain';
 import { PrismaService } from '../core/prisma.service';
 import { recordFinishedTask } from '../core/task-log';
+import { NotificationsService } from '../notifications/notifications.service';
 
 const REVIEW_LOAD_CAP = 30;
 const OPEN_REVIEW_STATUSES = ['PENDING_REVIEW', 'IN_REVIEW'] as const;
@@ -36,6 +37,7 @@ export class DistributionService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async createPlan(user: AuthUser, input: { dramaId: string; round: 'FIRST' | 'SECOND'; platformIds?: string[]; customPlatforms?: string[]; idempotencyKey?: string }) {
@@ -60,6 +62,7 @@ export class DistributionService {
       const problems: string[] = [];
       const readyEpisodes = drama.episodes.filter((episode) => episode.fileKey);
       if (!readyEpisodes.length) problems.push('还没有上传成片');
+      problems.push(...techProblems(readyEpisodes));
       const blocking = await tx.distributionPlan.findFirst({
         where: { dramaId: drama.id, round: input.round, status: { in: BLOCKING_PLAN_STATUSES } },
       });
@@ -273,6 +276,93 @@ export class DistributionService {
     await this.prisma.episode.updateMany({ where: { dramaId: plan.dramaId, reviewStatus: 'UNSAMPLED' }, data: { reviewStatus: 'PENDING' } });
     await this.audit.write(user.id, 'review.expand', 'DistributionPlan', planId);
     return this.getPlan(user, planId);
+  }
+
+  async listRejectReasons(user: AuthUser) {
+    assertRole(user, ['OPS', 'OPS_MANAGER', 'ADMIN']);
+    return this.prisma.rejectReason.findMany({ where: { enabled: true }, orderBy: [{ sort: 'asc' }, { code: 'asc' }] });
+  }
+
+  async createRejectReason(user: AuthUser, input: { code: string; category: string; title: string; template: string; enabled: boolean; sort: number }) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '驳回原因字典由运营主管或管理员维护');
+    if (await this.prisma.rejectReason.findUnique({ where: { code: input.code } })) throw new BadRequestException('编码已存在');
+    const row = await this.prisma.rejectReason.create({ data: input });
+    await this.audit.write(user.id, 'reject_reason.create', 'RejectReason', row.id);
+    return row;
+  }
+
+  async updateRejectReason(user: AuthUser, id: string, input: Partial<{ category: string; title: string; template: string; enabled: boolean; sort: number }>) {
+    assertRole(user, ['OPS_MANAGER', 'ADMIN'], '驳回原因字典由运营主管或管理员维护');
+    assertFound(await this.prisma.rejectReason.findUnique({ where: { id } }), '原因不存在');
+    const row = await this.prisma.rejectReason.update({ where: { id }, data: input });
+    await this.audit.write(user.id, 'reject_reason.update', 'RejectReason', id, input);
+    return row;
+  }
+
+  async rejectPlan(user: AuthUser, planId: string, input: { summary: string; reasonCode: string; episodeNos?: number[] }) {
+    const plan = await this.must(user, planId);
+    this.assertReviewer(user, plan);
+    if (!['PENDING_REVIEW', 'IN_REVIEW'].includes(plan.status)) throw new BadRequestException(`当前状态不能驳回`);
+    const nos = [...new Set(input.episodeNos ?? [])];
+    const episodes = nos.length ? await this.prisma.episode.findMany({ where: { dramaId: plan.dramaId, no: { in: nos } } }) : [];
+    const missing = nos.filter((no) => !episodes.some((episode) => episode.no === no));
+    if (missing.length) throw new BadRequestException(`第 ${missing.join('、')} 集不存在`);
+    const summary = episodes.length ? `${input.summary}\n问题集：第 ${episodes.map((episode) => episode.no).sort((a, b) => a - b).join('、')} 集` : input.summary;
+    await this.prisma.$transaction([
+      ...episodes.map((episode) => this.prisma.episode.update({ where: { id: episode.id }, data: { reviewStatus: 'REJECTED', rejectReason: input.summary } })),
+      ...episodes.map((episode) => this.prisma.reviewLog.create({ data: { planId, episodeId: episode.id, episodeNo: episode.no, action: 'REJECTED', reason: input.summary, actorId: user.id } })),
+      this.prisma.distributionPlan.update({ where: { id: planId }, data: { status: 'NEEDS_REVISION', rejectSummary: summary, assigneeId: plan.assigneeId ?? user.id } }),
+    ]);
+    const ticket = await this.openTicket(plan, '审核还需要修改', summary, user.id);
+    await this.audit.write(user.id, 'review.batch_reject', 'DistributionPlan', planId, { reasonCode: input.reasonCode, episodeNos: nos });
+    return { planId, code: plan.code, companyId: plan.companyId, dramaTitle: plan.drama.title, ticketCode: ticket.code };
+  }
+
+  async batchReject(user: AuthUser, input: { items: { planId: string; episodeNos?: number[] }[]; reasonCode: string; note?: string }) {
+    assertBusinessWrite(user);
+    assertRole(user, ['OPS', 'OPS_MANAGER']);
+    const reason = await this.prisma.rejectReason.findUnique({ where: { code: input.reasonCode } });
+    if (!reason || !reason.enabled) throw new BadRequestException('驳回原因不存在或已停用');
+    if (reason.code === 'OTHER' && !input.note) throw new BadRequestException('选择「其他」时请填写补充说明');
+    const summary = `【${reason.title}】${reason.template}${input.note ? `\n补充说明：${input.note}` : ''}`;
+    const seen = new Set<string>();
+    const items = input.items.filter((item) => (seen.has(item.planId) ? false : (seen.add(item.planId), true)));
+    const rejected: { planId: string; code: string; companyId: string; dramaTitle: string; ticketCode: string }[] = [];
+    const skipped: { planId: string; reason: string }[] = [];
+    for (const item of items) {
+      try {
+        rejected.push(await this.rejectPlan(user, item.planId, { summary, reasonCode: reason.code, episodeNos: item.episodeNos }));
+      } catch (error) {
+        if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof NotFoundException) {
+          skipped.push({ planId: item.planId, reason: error.message });
+          continue;
+        }
+        throw error;
+      }
+    }
+    const task = await recordFinishedTask(this.prisma, user.id, {
+      type: 'REVIEW_BATCH_REJECT',
+      name: `批量驳回「${reason.title}」（${items.length} 部）`,
+      succeeded: rejected.length,
+      failed: 0,
+      skipped: skipped.length,
+      items: skipped.map((item) => ({ key: item.planId, status: 'SKIPPED', message: item.reason })),
+    });
+    const byCompany = new Map<string, { title: string; ticket: string }[]>();
+    for (const row of rejected) {
+      byCompany.set(row.companyId, [...(byCompany.get(row.companyId) ?? []), { title: row.dramaTitle, ticket: row.ticketCode }]);
+    }
+    for (const [companyId, list] of byCompany) {
+      const clients = await this.prisma.user.findMany({ where: { companyId, role: 'CLIENT' }, select: { id: true } });
+      await this.notifications.pushMany(clients.map((client) => client.id), {
+        type: 'REVIEW_REJECT_BATCH',
+        title: `审核结果：${list.length} 部剧需要修改`,
+        body: `原因：${reason.title}${input.note ? `（${input.note}）` : ''}\n${list.map((item) => `《${item.title}》工单 ${item.ticket}`).join('\n')}`,
+        entityType: 'AsyncTask',
+        entityId: task.id,
+      });
+    }
+    return { rejected, skipped, rejectedCount: rejected.length, skippedCount: skipped.length, task: { id: task.id, name: task.name } };
   }
 
   async finish(user: AuthUser, planId: string) {
@@ -786,7 +876,7 @@ export class DistributionService {
 
   private async openTicket(plan: { id: string; companyId: string; dramaId: string; drama: { title: string } }, title: string, body: string, actorId: string) {
     const code = await this.prisma.$transaction(async (tx) => nextCode(tx, 'GD', 5));
-    await this.prisma.ticket.create({
+    return this.prisma.ticket.create({
       data: {
         code,
         companyId: plan.companyId,
@@ -827,6 +917,15 @@ export class DistributionService {
       update: { body: plain },
     });
   }
+}
+
+function techProblems(episodes: { no: number; techStatus: string }[]) {
+  const checking = episodes.filter((episode) => episode.techStatus === 'CHECKING');
+  const failed = episodes.filter((episode) => episode.techStatus === 'FAILED').map((episode) => episode.no);
+  const out: string[] = [];
+  if (checking.length) out.push(`有 ${checking.length} 集还在技术校验中，请稍后再试`);
+  if (failed.length) out.push(`第 ${failed.join('、')} 集技术校验失败，请替换后再申请`);
+  return out;
 }
 
 function cellText(value: ExcelJS.CellValue): string {

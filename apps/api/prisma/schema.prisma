@@ -230,6 +230,9 @@ model Company {
   certStatus    CertStatus @default(UNVERIFIED)
   certRejectReason String?
   certDraft     Json?
+  /// 认证向导草稿。certDraft 仍表示已认证企业的变更待审内容。
+  certWizard    Json?
+  certWizardStep Int      @default(0)
   ownerId       String?
   owner         User?      @relation("CompanyOwner", fields: [ownerId], references: [id])
   bdId          String?
@@ -472,6 +475,21 @@ model ShareConfig {
   updatedAt           DateTime          @updatedAt
 
   @@unique([planId, platformId])
+}
+
+/// 批量驳回原因字典。停用即可，不物理删除，历史工单保留原文。
+model RejectReason {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  category  String
+  title     String
+  template  String
+  enabled   Boolean  @default(true)
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, sort])
 }
 
 model ReviewLog {

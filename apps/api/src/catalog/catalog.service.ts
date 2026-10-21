@@ -65,6 +65,10 @@ export class CatalogService {
     return { ids: rows.map((row) => row.id), total };
   }
 
+  filterWhere(user: AuthUser, query: Partial<DramaListQuery>) {
+    return this.whereFor(user, { page: 1, pageSize: 20, sort: 'updatedAt', order: 'desc', ...query });
+  }
+
   async batchMeta(user: AuthUser, input: z.infer<typeof dramaBatchSchema>) {
     if (!input.tag && !input.group) throw new BadRequestException('请填写标签或分组');
     const where = this.whereFor(user, this.asListQuery({}));
@@ -118,7 +122,16 @@ export class CatalogService {
     return Buffer.from(await book.xlsx.writeBuffer());
   }
 
+  previewMetadata(user: AuthUser, file: Buffer) {
+    return this.readMetadata(user, file, false);
+  }
+
   async importMetadata(user: AuthUser, file: Buffer) {
+    const result = await this.readMetadata(user, file, true);
+    return { rows: result.rows, applied: result.applied, failed: result.failed };
+  }
+
+  private async readMetadata(user: AuthUser, file: Buffer, apply: boolean) {
     const companyId = this.clientCompany(user);
     const book = new ExcelJS.Workbook();
     await book.xlsx.load(file as unknown as ExcelJS.Buffer);
@@ -130,7 +143,7 @@ export class CatalogService {
     const langCol = col('语言');
     const countCol = col('集数');
     if (titleCol < 0 || langCol < 0 || countCol < 0) throw new BadRequestException('模板必须包含剧名、语言、集数');
-    const rows: { rowNo: number; ok: boolean; error: string }[] = [];
+    const rows: { rowNo: number; ok: boolean; error: string; title?: string; action?: string }[] = [];
     for (let rowNo = 2; rowNo <= sheet.rowCount; rowNo += 1) {
       const row = sheet.getRow(rowNo);
       const title = cellText(row.getCell(titleCol).value);
@@ -146,40 +159,45 @@ export class CatalogService {
       }
       const nameNorm = normalizeName(title);
       const existing = await this.prisma.drama.findFirst({ where: { companyId, nameNorm } });
-      const drama = existing ?? await this.prisma.$transaction(async (tx) => tx.drama.create({
-        data: { code: await nextCode(tx, 'D'), companyId, title, nameNorm, language, episodeCountExpected: Number(countRaw) },
-      }));
-      await this.prisma.drama.update({
-        where: { id: drama.id },
-        data: {
-          language,
-          episodeCountExpected: Number(countRaw),
-          titleEn: col('外文名') > 0 ? cellText(row.getCell(col('外文名')).value) || undefined : undefined,
-          genre: col('题材') > 0 ? cellText(row.getCell(col('题材')).value) || undefined : undefined,
-          synopsis: col('简介') > 0 ? cellText(row.getCell(col('简介')).value) || undefined : undefined,
-        },
-      });
+      const drama = apply
+        ? existing ?? await this.prisma.$transaction(async (tx) => tx.drama.create({
+          data: { code: await nextCode(tx, 'D'), companyId, title, nameNorm, language, episodeCountExpected: Number(countRaw) },
+        }))
+        : existing;
+      if (apply && drama) {
+        await this.prisma.drama.update({
+          where: { id: drama.id },
+          data: {
+            language,
+            episodeCountExpected: Number(countRaw),
+            titleEn: col('外文名') > 0 ? cellText(row.getCell(col('外文名')).value) || undefined : undefined,
+            genre: col('题材') > 0 ? cellText(row.getCell(col('题材')).value) || undefined : undefined,
+            synopsis: col('简介') > 0 ? cellText(row.getCell(col('简介')).value) || undefined : undefined,
+          },
+        });
+      }
       if (fileName) {
-        const episode = await this.prisma.episode.findFirst({ where: { fileName, drama: { companyId, id: drama.id } } });
+        const episode = drama ? await this.prisma.episode.findFirst({ where: { fileName, drama: { companyId, id: drama.id } } }) : null;
         if (!episode) {
-          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按文件名匹配到文件` });
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按文件名匹配到文件`, title });
           continue;
         }
       } else if (episodeRaw) {
         if (!/^\d+$/.test(episodeRaw)) {
-          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行集号不正确` });
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行集号不正确`, title });
           continue;
         }
-        const episode = await this.prisma.episode.findFirst({ where: { no: Number(episodeRaw), dramaId: drama.id } });
+        const episode = drama ? await this.prisma.episode.findFirst({ where: { no: Number(episodeRaw), dramaId: drama.id } }) : null;
         if (!episode) {
-          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按剧名和集号匹配到文件` });
+          rows.push({ rowNo, ok: false, error: `第 ${rowNo} 行未按剧名和集号匹配到文件`, title });
           continue;
         }
       }
-      rows.push({ rowNo, ok: true, error: '' });
+      rows.push({ rowNo, ok: true, error: '', title, action: existing ? '更新' : '新建' });
     }
     if (!rows.length) throw new BadRequestException('没有读到剧目');
-    return { rows, applied: rows.filter((row) => row.ok).length, failed: rows.filter((row) => !row.ok).length };
+    const ready = rows.filter((row) => row.ok).length;
+    return { preview: !apply, rows, applied: apply ? ready : 0, ready, failed: rows.filter((row) => !row.ok).length };
   }
 
   async exportCsv(user: AuthUser, query: DramaListQuery & { ids?: string[] }) {

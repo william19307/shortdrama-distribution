@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type { z } from 'zod';
-import { bankAccountSchema, certReviewSchema, certSchema, ownerPatchSchema, pageSchema } from '@shortform/shared';
+import { bankAccountSchema, certReviewSchema, certSchema, certStep1Schema, certStep2Schema, certStep3Schema, ownerPatchSchema, pageSchema } from '@shortform/shared';
 import { assertCompanyAccess, assertFound, maskAccount } from '../core/access';
 import { AuditService } from '../core/audit.service';
 import { assertBusinessWrite, assertRole, AuthUser } from '../core/auth';
@@ -9,6 +9,8 @@ import { PrismaService } from '../core/prisma.service';
 
 type CertInput = z.infer<typeof certSchema>;
 type BankInput = z.infer<typeof bankAccountSchema>;
+const CERT_LOCKED = ['PENDING', 'CHANGE_PENDING'];
+const CERT_REVIEW_DAYS = 1;
 
 @Injectable()
 export class CompanyService {
@@ -35,7 +37,7 @@ export class CompanyService {
     if (company.certStatus === 'APPROVED') {
       await this.prisma.company.update({
         where: { id: company.id },
-        data: { certStatus: 'CHANGE_PENDING', certDraft: input, certRejectReason: null },
+        data: { certStatus: 'CHANGE_PENDING', certDraft: input, certRejectReason: null, certWizard: Prisma.DbNull, certWizardStep: 0 },
       });
     } else {
       await this.prisma.company.update({
@@ -50,11 +52,100 @@ export class CompanyService {
           certStatus: 'PENDING',
           certRejectReason: null,
           certDraft: Prisma.DbNull,
+          certWizard: Prisma.DbNull,
+          certWizardStep: 0,
         },
       });
     }
     await this.audit.write(user.id, 'cert.submit', 'Company', company.id);
     return this.myCompany(user);
+  }
+
+  async getCertWizard(user: AuthUser) {
+    const company = await this.wizardCompany(user);
+    const data = (company.certWizard ?? {}) as Record<string, Record<string, unknown>>;
+    const step3 = data.step3 ? { ...data.step3, accountNo: data.step3.accountNo ? maskAccount(String(data.step3.accountNo)) : undefined } : undefined;
+    return {
+      certStatus: company.certStatus,
+      certRejectReason: company.certRejectReason,
+      currentStep: company.certWizardStep,
+      editable: !CERT_LOCKED.includes(company.certStatus),
+      steps: { step1: data.step1 ?? null, step2: data.step2 ?? null, step3: step3 ?? null },
+      prefill: {
+        name: company.name,
+        creditCode: company.creditCode,
+        legalPerson: company.legalPerson,
+        contactName: company.contactName,
+        contactPhone: company.contactPhone,
+        licenseKey: company.licenseKey,
+      },
+    };
+  }
+
+  async saveCertStep(user: AuthUser, step: number, body: unknown) {
+    const company = await this.wizardCompany(user);
+    if (CERT_LOCKED.includes(company.certStatus)) throw new BadRequestException('认证正在审核，暂不能修改');
+    const schema = step === 1 ? certStep1Schema : step === 2 ? certStep2Schema : step === 3 ? certStep3Schema : null;
+    if (!schema) throw new BadRequestException('步骤只能是 1、2、3');
+    const parsed = schema.safeParse(body ?? {});
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues.map((issue) => issue.message).join('；'));
+    const value = parsed.data as Record<string, unknown>;
+    if (step === 1) {
+      const key = String(value.licenseKey);
+      if (!key.startsWith(`${company.id}/`) && key !== company.licenseKey) throw new BadRequestException('营业执照文件不属于当前企业，请重新上传');
+    }
+    const data = { ...((company.certWizard ?? {}) as Record<string, unknown>), [`step${step}`]: value };
+    await this.prisma.company.update({
+      where: { id: company.id },
+      data: { certWizard: data as Prisma.InputJsonValue, certWizardStep: Math.max(company.certWizardStep, step) },
+    });
+    return this.getCertWizard(user);
+  }
+
+  async submitCertWizard(user: AuthUser) {
+    const company = await this.wizardCompany(user);
+    if (CERT_LOCKED.includes(company.certStatus)) throw new BadRequestException('认证正在审核，请等待结果');
+    const data = (company.certWizard ?? {}) as { step1?: Record<string, string>; step2?: Record<string, string>; step3?: Record<string, unknown> };
+    if (!data.step1) throw new BadRequestException('请先完成第 1 步：上传营业执照');
+    const merged = {
+      name: data.step1.name ?? company.name,
+      creditCode: data.step1.creditCode ?? company.creditCode ?? undefined,
+      licenseKey: data.step1.licenseKey,
+      legalPerson: data.step2?.legalPerson ?? company.legalPerson ?? undefined,
+      contactName: data.step2?.contactName ?? company.contactName ?? undefined,
+      contactPhone: data.step2?.contactPhone ?? company.contactPhone ?? undefined,
+    };
+    const parsed = certSchema.safeParse(merged);
+    if (!parsed.success) throw new BadRequestException('资料不完整，请补充后再提交');
+    const step3 = data.step3;
+    let bankLater = true;
+    if (step3 && !step3.skip) {
+      const bank = bankAccountSchema.safeParse({
+        accountName: step3.accountName ?? parsed.data.name,
+        bankName: step3.bankName,
+        branch: step3.branch,
+        accountNo: step3.accountNo,
+        isDefault: true,
+      });
+      if (!bank.success) throw new BadRequestException(`第 3 步对公账户不完整：${bank.error.issues.map((issue) => issue.message).join('；')}（也可选择「稍后填写」）`);
+      const dup = await this.prisma.bankAccount.findFirst({ where: { companyId: company.id, accountNo: bank.data.accountNo } });
+      if (!dup) await this.addBank(user, bank.data);
+      bankLater = false;
+    }
+    await this.submitCert(user, parsed.data);
+    await this.audit.write(user.id, 'cert.wizard_submit', 'Company', company.id, { bankLater });
+    const updated = assertFound(await this.prisma.company.findUnique({ where: { id: company.id } }));
+    return {
+      certStatus: updated.certStatus,
+      bankLater,
+      expectedReviewDays: CERT_REVIEW_DAYS,
+      tip: `预计 ${CERT_REVIEW_DAYS} 个工作日内完成审核${bankLater ? '；对公账户可在提款时再补充' : ''}`,
+    };
+  }
+
+  private async wizardCompany(user: AuthUser) {
+    if (user.role !== 'CLIENT' || !user.companyId) throw new BadRequestException('请使用客户账号进行企业认证');
+    return assertFound(await this.prisma.company.findUnique({ where: { id: user.companyId } }), '企业不存在');
   }
 
   async list(user: AuthUser, query: { page: number; pageSize: number; q?: string; certStatus?: string }) {
@@ -74,7 +165,15 @@ export class CompanyService {
       }),
       this.prisma.company.count({ where }),
     ]);
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return {
+      items: items.map((item) => {
+        const { certWizard: _wizard, ...rest } = item;
+        return rest;
+      }),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   async detail(user: AuthUser, id: string) {
@@ -220,9 +319,10 @@ export class CompanyService {
     return { ...row, accountNo: full ? row.accountNo : maskAccount(row.accountNo) };
   }
 
-  private present(company: { bankAccounts?: { accountNo: string }[] } & Record<string, unknown>, user: AuthUser) {
+  private present(company: { bankAccounts?: { accountNo: string }[]; certWizard?: unknown } & Record<string, unknown>, user: AuthUser) {
+    const { certWizard: _wizard, ...rest } = company;
     return {
-      ...company,
+      ...rest,
       bankAccounts: company.bankAccounts?.map((row) => this.presentBank(row, user)),
     };
   }

@@ -424,6 +424,76 @@ export const ownerPatchSchema = z.object({
   ownerId: z.string().nullable(),
 });
 
+export const selectionFilterSchema = dramaListSchema.omit({ page: true, pageSize: true, sort: true, order: true });
+export const SELECTION_ACTIONS = ['PLAN', 'TAG', 'GROUP', 'EXPORT'] as const;
+export const SELECTION_LIMITS: Record<(typeof SELECTION_ACTIONS)[number], number> = { PLAN: 200, TAG: 1000, GROUP: 1000, EXPORT: 5000 };
+
+export const selectionPreviewSchema = z.object({
+  filter: selectionFilterSchema,
+  action: z.enum(SELECTION_ACTIONS),
+});
+
+const selectionLabelList = z.array(z.string().trim().min(1).max(30)).max(20);
+export const selectionExecuteSchema = z.object({
+  filter: selectionFilterSchema,
+  action: z.enum(['PLAN', 'TAG', 'GROUP']),
+  expectedCount: z.number().int().min(1),
+  params: z
+    .object({
+      add: selectionLabelList.optional(),
+      remove: selectionLabelList.optional(),
+      round: z.enum(PLAN_ROUNDS).optional(),
+      platformIds: z.array(z.string()).optional(),
+      customPlatforms: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
+    })
+    .default({}),
+});
+
+export const selectionExportSchema = z.object({
+  filter: selectionFilterSchema,
+  expectedCount: z.number().int().min(1),
+});
+
+export const certStep1Schema = z.object({
+  licenseKey: z.string().min(1, '请上传营业执照'),
+  name: z.string().trim().min(2).max(80).optional(),
+  creditCode: z.string().trim().regex(/^[0-9A-Z]{18}$/, '统一社会信用代码为 18 位').optional(),
+});
+
+export const certStep2Schema = z.object({
+  legalPerson: z.string().trim().min(1).max(40).optional(),
+  contactName: z.string().trim().min(1).max(40).optional(),
+  contactPhone: z.string().trim().min(6).max(30).optional(),
+});
+
+export const certStep3Schema = z.object({
+  skip: z.boolean().default(false),
+  accountName: z.string().trim().min(2).max(80).optional(),
+  bankName: z.string().trim().min(2).max(80).optional(),
+  branch: z.string().trim().max(80).optional(),
+  accountNo: z.string().trim().min(6).max(40).optional(),
+});
+
+export const rejectReasonSchema = z.object({
+  code: z.string().trim().regex(/^[A-Z0-9_]{2,30}$/, '编码为 2~30 位大写字母/数字/下划线'),
+  category: z.string().trim().min(1).max(20),
+  title: z.string().trim().min(1).max(40),
+  template: z.string().trim().min(1).max(500),
+  enabled: z.boolean().default(true),
+  sort: z.number().int().min(0).max(9999).default(0),
+});
+
+export const rejectReasonPatchSchema = rejectReasonSchema.omit({ code: true }).partial();
+
+export const batchRejectSchema = z.object({
+  items: z
+    .array(z.object({ planId: z.string().min(1), episodeNos: z.array(z.number().int().positive()).max(999).optional() }))
+    .min(1)
+    .max(200, '单次最多 200 部'),
+  reasonCode: z.string().min(1),
+  note: z.string().trim().max(500).optional(),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type DramaListQuery = z.infer<typeof dramaListSchema>;

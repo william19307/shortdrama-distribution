@@ -46,6 +46,15 @@ async function upload(token: string, filename: string, body: Buffer, purpose: st
   return done.body as { key: string };
 }
 
+async function markEpisodeReady(dramaId: string, no: number) {
+  for (let i = 0; i < 50; i += 1) {
+    const episode = await prisma.episode.findFirst({ where: { dramaId, no } });
+    if (episode && episode.techStatus !== 'CHECKING') break;
+    await new Promise((resolve) => setTimeout(resolve, 40));
+  }
+  await prisma.episode.updateMany({ where: { dramaId, no }, data: { techStatus: 'READY', techNote: '' } });
+}
+
 describe('核心流程', () => {
   beforeAll(async () => {
     app = await buildApp();
@@ -142,6 +151,7 @@ describe('核心流程', () => {
     expect(drama.status).toBeLessThan(300);
     const dramaId = drama.body.id as string;
     await upload(clientToken, 'ep1.mp4', Buffer.from('episode-one'), 'EPISODE', { dramaId, episodeNo: 1 });
+    await markEpisodeReady(dramaId, 1);
     await upload(clientToken, 'license.pdf', Buffer.from('license'), 'LICENSE', { dramaId });
     const pendingPlan = await authed(clientToken).post('/api/plans').send({ dramaId, round: 'FIRST' });
     expect(pendingPlan.status).toBe(400);

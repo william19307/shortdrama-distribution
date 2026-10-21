@@ -25,6 +25,21 @@ export class CompanyController {
     return this.companies.submitCert(user, body);
   }
 
+  @Get('company/certification/draft')
+  wizard(@CurrentUser() user: AuthUser) {
+    return this.companies.getCertWizard(user);
+  }
+
+  @Put('company/certification/draft/:step')
+  saveStep(@CurrentUser() user: AuthUser, @Param('step') step: string, @Body() body: unknown) {
+    return this.companies.saveCertStep(user, Number(step), body);
+  }
+
+  @Post('company/certification/draft/submit')
+  submitWizard(@CurrentUser() user: AuthUser) {
+    return this.companies.submitCertWizard(user);
+  }
+
   @Get('companies')
   list(@CurrentUser() user: AuthUser, @Query(new ZodPipe(listSchema)) query: z.infer<typeof listSchema>) {
     return this.companies.list(user, query);
