@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shortform
+      POSTGRES_PASSWORD: shortform
+      POSTGRES_DB: shortform
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shortform -d shortform"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    # Docker Hub 的 minio/minio、minio/mc，以及 Quay 的 minio/minio 目前都拉不下来。
+    # 用仍可匿名拉取的 bitnamilegacy/minio。桶由 API 启动时创建，不再依赖 mc。
+    image: bitnamilegacy/minio:latest
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: minio123456
+      # 这套 MinIO 的桶 CORS 接口返回未实现。全局允许来源后，浏览器才能直传。
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      NODE_ENV: production
+      SEED_DEMO: "true"
+      UPLOAD_VIA_API: "false"
+      PORT: "3000"
+      DATABASE_URL: postgresql://shortform:shortform@postgres:5432/shortform
+      JWT_SECRET: demo-jwt-secret-must-be-32-characters-min
+      WEB_ORIGIN: http://localhost:8080
+      STORAGE_DRIVER: s3
+      S3_ENDPOINT: http://minio:9000
+      PUBLIC_OBJECT_URL: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: shortform
+      S3_ACCESS_KEY: minio
+      S3_SECRET_KEY: minio123456
+      S3_FORCE_PATH_STYLE: "true"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_SHOW_DEMOS: "true"
+    ports:
+      - "8080:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  minio:

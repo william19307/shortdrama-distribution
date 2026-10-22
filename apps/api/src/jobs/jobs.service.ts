@@ -1,0 +1,378 @@
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import cron, { ScheduledTask } from 'node-cron';
+import { AuditService } from '../core/audit.service';
+import { assertRole, AuthUser, day, nextCode } from '../core/auth';
+import { expectedStatDate, shanghaiToday } from '@shortform/shared';
+import { PrismaService } from '../core/prisma.service';
+import { SettingsService } from '../core/settings.service';
+import { NotificationsService } from '../notifications/notifications.service';
+
+export const JOB_NAMES = ['sync-tasks', 'daily-stats-warn', 'daily-stats-escalate', 'review-sla', 'settlement-generate'] as const;
+export type JobName = (typeof JOB_NAMES)[number];
+
+export type JobSchedule = {
+  tz: string;
+  ds01: string | null;
+  ds09Warn: string | null;
+  ds09Repeat: string | null;
+  ds09Escalate: string | null;
+  rv12: string | null;
+  st02: string | null;
+  slaWarnRatio: number;
+  slaDoubleRatio: number;
+};
+
+function cronExpr(env: NodeJS.ProcessEnv, key: string, fallback: string) {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  if (raw.trim().toLowerCase() === 'off') return null;
+  return raw.trim();
+}
+
+function ratio(env: NodeJS.ProcessEnv, key: string, fallback: number) {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return fallback;
+  return value;
+}
+
+/** 时刻与 SLA 时限。表达式填 off 可关掉这一条。 */
+export function jobScheduleFromEnv(env: NodeJS.ProcessEnv = process.env): JobSchedule {
+  return {
+    tz: env.CRON_TZ?.trim() || 'Asia/Shanghai',
+    ds01: cronExpr(env, 'CRON_DS01', '0 0 * * *'),
+    ds09Warn: cronExpr(env, 'CRON_DS09_WARN', '0 5 * * *'),
+    ds09Repeat: cronExpr(env, 'CRON_DS09_REPEAT', '*/30 * * * *'),
+    ds09Escalate: cronExpr(env, 'CRON_DS09_ESCALATE', '0 6 * * *'),
+    rv12: cronExpr(env, 'CRON_RV12', '0 0,6,12,18 * * *'),
+    st02: cronExpr(env, 'CRON_ST02', '0 1 * * *'),
+    slaWarnRatio: ratio(env, 'SLA_WARN_RATIO', 0.8),
+    slaDoubleRatio: ratio(env, 'SLA_DOUBLE_RATIO', 2),
+  };
+}
+
+@Injectable()
+export class JobsService implements OnModuleInit, OnModuleDestroy {
+  private readonly log = new Logger(JobsService.name);
+  private readonly tasks: ScheduledTask[] = [];
+  private readonly schedule = jobScheduleFromEnv();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly notifications: NotificationsService,
+    private readonly settings: SettingsService,
+  ) {}
+
+  onModuleInit() {
+    if (process.env.NODE_ENV === 'test' || process.env.JOBS_ENABLED === 'false') return;
+    this.startCron(this.schedule.ds01, 'DS-01 生成同步任务', () => this.syncTasks());
+    this.startCron(this.schedule.ds09Warn, 'DS-09 05:00 预警', () => this.dailyStatsWarn());
+    this.startCron(this.schedule.ds09Repeat, 'DS-09 未完成重复提醒', () => this.dailyStatsWarn());
+    this.startCron(this.schedule.ds09Escalate, 'DS-09 超时升级', () => this.dailyStatsEscalate());
+    this.startCron(this.schedule.rv12, 'RV-12 审核 SLA', () => this.reviewSla());
+    this.startCron(this.schedule.st02, 'ST-02 自动生成结算单', () => this.settlementGenerate());
+  }
+
+  onModuleDestroy() {
+    for (const task of this.tasks) task.stop();
+    this.tasks.length = 0;
+  }
+
+  private startCron(expr: string | null, label: string, fn: () => Promise<unknown>) {
+    if (!expr) return;
+    if (!cron.validate(expr)) {
+      this.log.error(`${label} 的 cron 表达式无效：${expr}`);
+      return;
+    }
+    const task = cron.schedule(expr, () => {
+      void fn().catch((error: unknown) => this.log.error(`${label} 失败`, error instanceof Error ? error.stack : error));
+    }, { timezone: this.schedule.tz });
+    this.tasks.push(task);
+    this.log.log(`${label} 已登记 ${expr}（${this.schedule.tz}）`);
+  }
+
+  async run(name: string, user?: AuthUser) {
+    if (user) assertRole(user, ['ADMIN', 'OPS_MANAGER']);
+    if (!(JOB_NAMES as readonly string[]).includes(name)) {
+      throw new BadRequestException(`未知任务：${name}，可选 ${JOB_NAMES.join('、')}`);
+    }
+    switch (name as JobName) {
+      case 'sync-tasks':
+        return this.syncTasks();
+      case 'daily-stats-warn':
+        return this.dailyStatsWarn();
+      case 'daily-stats-escalate':
+        return this.dailyStatsEscalate();
+      case 'review-sla':
+        return this.reviewSla();
+      case 'settlement-generate':
+        return this.settlementGenerate();
+      default:
+        throw new BadRequestException(`未知任务：${name}`);
+    }
+  }
+
+  async syncTasks() {
+    const today = day(shanghaiToday());
+    const due = await this.prisma.platform.findMany({
+      where: { syncLagPending: { not: null }, syncLagEffectiveOn: { lte: today } },
+    });
+    for (const platform of due) {
+      if (!platform.syncLagPending) continue;
+      await this.prisma.platform.update({
+        where: { id: platform.id },
+        data: { syncLag: platform.syncLagPending, syncLagPending: null, syncLagEffectiveOn: null },
+      });
+      await this.audit.write(null, 'platform.sync-lag.apply', 'Platform', platform.id, { syncLag: platform.syncLagPending });
+    }
+    const platforms = await this.prisma.platform.findMany({ where: { enabled: true }, select: { id: true, code: true, syncLag: true } });
+    const created: string[] = [];
+    for (const platform of platforms) {
+      const statDate = expectedStatDate(platform.syncLag);
+      const existing = await this.prisma.syncTask.findUnique({
+        where: { platformId_statDate: { platformId: platform.id, statDate: day(statDate) } },
+      });
+      if (existing) continue;
+      await this.prisma.syncTask.create({ data: { platformId: platform.id, statDate: day(statDate), status: 'PENDING' } });
+      created.push(`${platform.code}:${statDate}`);
+    }
+    const message = `[DS-01] 生成同步任务 ${created.length} 条`;
+    this.log.log(message);
+    await this.audit.write(null, 'job.sync-tasks', 'SyncTask', shanghaiToday(), { message, created });
+    return { job: 'sync-tasks', created, message };
+  }
+
+  async dailyStatsWarn() {
+    const yesterday = this.yesterdayIso();
+    const pendingRows = await this.prisma.dailyStat.findMany({
+      where: { statDate: day(yesterday), status: { in: ['DRAFT', 'ANOMALY'] } },
+      select: { company: { select: { ownerId: true } } },
+    });
+    const pending = pendingRows.length;
+    const message = `[DS-09] ${yesterday} 仍有 ${pending} 条日报未完成`;
+    const slot = this.halfHourSlot();
+    const entityId = `${yesterday}:${slot}`;
+    if (!pending) return { job: 'daily-stats-warn', date: yesterday, pending, notified: 0, message };
+    const already = await this.prisma.auditLog.findFirst({ where: { action: 'job.daily-stats-warn', entityId } });
+    if (already) return { job: 'daily-stats-warn', date: yesterday, pending, notified: 0, message };
+    const owners = [...new Set(pendingRows.map((row) => row.company.ownerId).filter((id): id is string => Boolean(id)))];
+    const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
+    const targets = [...new Set([...owners, ...managers.map((row) => row.id)])];
+    const pushed = await this.notifications.pushMany(targets, {
+      type: 'DS09_WARN',
+      title: message,
+      body: '请完成录入和复核。未完成会每 30 分钟再提醒一次。',
+      entityType: 'DailyStat',
+      entityId,
+    });
+    this.log.warn(message);
+    await this.audit.write(null, 'job.daily-stats-warn', 'Job', entityId, { message, pending, notified: pushed.count });
+    return { job: 'daily-stats-warn', date: yesterday, pending, notified: pushed.count, message };
+  }
+
+  async dailyStatsEscalate() {
+    const yesterday = this.yesterdayIso();
+    const pending = await this.prisma.dailyStat.count({
+      where: { statDate: day(yesterday), status: { in: ['DRAFT', 'ANOMALY'] } },
+    });
+    const managers = await this.prisma.user.findMany({
+      where: { role: 'OPS_MANAGER', disabled: false },
+      select: { id: true, email: true, name: true },
+    });
+    const message = `[DS-09] 超时升级：${yesterday} 未完成日报 ${pending} 条，通知运营主管 ${managers.length} 人`;
+    if (pending) {
+      await this.notifications.pushMany(managers.map((row) => row.id), {
+        type: 'DS09_ESCALATE',
+        title: message,
+        body: '日报已过同步时限，请运营主管跟进。',
+        entityType: 'DailyStat',
+        entityId: yesterday,
+      });
+    }
+    const today = shanghaiToday();
+    await this.prisma.syncTask.updateMany({
+      where: { status: { in: ['PENDING', 'SYNCING'] }, statDate: { lt: day(today) } },
+      data: { status: 'OVERDUE' },
+    });
+    this.log.error(message);
+    await this.audit.write(null, 'job.daily-stats-escalate', 'Job', yesterday, { message, pending, managers: managers.map((row) => row.id) });
+    return { job: 'daily-stats-escalate', date: yesterday, pending, managers, message };
+  }
+
+  async reviewSla() {
+    const now = Date.now();
+    const open = await this.prisma.distributionPlan.findMany({
+      where: { status: { in: ['PENDING_REVIEW', 'IN_REVIEW', 'SHARE_CONFIG', 'SHARE_REVIEW'] }, slaDueAt: { not: null } },
+      select: { id: true, code: true, slaDueAt: true, submittedAt: true, assigneeId: true },
+    });
+    const ratios = await this.alertRatios();
+    const buckets = { warn80: [] as string[], overdue: [] as string[], double: [] as string[] };
+    const due: { id: string; code: string; assigneeId: string | null; tier: 'warn80' | 'overdue' | 'double'; slaDueAt: Date }[] = [];
+    for (const plan of open) {
+      if (!plan.slaDueAt || !plan.submittedAt) continue;
+      const span = Math.max(plan.slaDueAt.getTime() - plan.submittedAt.getTime(), 1);
+      const used = (now - plan.submittedAt.getTime()) / span;
+      const tier = used >= ratios.slaDoubleRatio ? 'double' : now >= plan.slaDueAt.getTime() ? 'overdue' : used >= ratios.slaWarnRatio ? 'warn80' : null;
+      if (!tier) continue;
+      buckets[tier].push(plan.code);
+      due.push({ id: plan.id, code: plan.code, assigneeId: plan.assigneeId, tier, slaDueAt: plan.slaDueAt });
+    }
+    const managers = await this.prisma.user.findMany({ where: { role: 'OPS_MANAGER', disabled: false }, select: { id: true } });
+    const admins = await this.prisma.user.findMany({ where: { role: 'ADMIN', disabled: false }, select: { id: true } });
+    const managerIds = managers.map((row) => row.id);
+    const adminIds = admins.map((row) => row.id);
+    let deduped = 0;
+    for (const plan of due) {
+      const claimed = await this.prisma.slaAlert.createMany({
+        data: [{ planId: plan.id, tier: plan.tier, dueAt: plan.slaDueAt }],
+        skipDuplicates: true,
+      });
+      if (!claimed.count) {
+        deduped += 1;
+        continue;
+      }
+      const entityId = `${plan.id}:${plan.tier}:${plan.slaDueAt.toISOString()}`;
+      if (plan.tier === 'warn80') {
+        await this.notifications.pushMany(plan.assigneeId ? [plan.assigneeId] : managerIds, {
+          type: 'RV12_WARN80',
+          title: `[RV-12] SLA 已用 80%：${plan.code}`,
+          body: '审核即将超时，请尽快处理。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      } else if (plan.tier === 'overdue') {
+        await this.notifications.pushMany([...(plan.assigneeId ? [plan.assigneeId] : []), ...managerIds], {
+          type: 'RV12_OVERDUE',
+          title: `[RV-12] SLA 已超时：${plan.code}`,
+          body: '审核已超时，已通知运营主管。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      } else {
+        await this.notifications.pushMany([...managerIds, ...adminIds], {
+          type: 'RV12_DOUBLE',
+          title: `[RV-12] SLA 2倍超时：${plan.code}`,
+          body: '审核严重超时，请改派或介入。',
+          entityType: 'DistributionPlan',
+          entityId,
+        });
+      }
+    }
+    const message = `[RV-12] SLA 巡检：80%预警 ${buckets.warn80.length}、超时 ${buckets.overdue.length}、2倍 ${buckets.double.length}（已提醒过跳过 ${deduped}）`;
+    this.log.log(message);
+    await this.audit.write(null, 'job.review-sla', 'Job', this.halfHourSlot(), { message, ...buckets, deduped });
+    return { job: 'review-sla', ...buckets, deduped, message };
+  }
+
+  async settlementGenerate() {
+    const policies = await this.prisma.settlementPolicy.findMany({ include: { company: { select: { id: true, name: true } } } });
+    const created: string[] = [];
+    const skipped: string[] = [];
+    for (const policy of policies) {
+      const version = await this.prisma.settlementPolicyVersion.findFirst({
+        where: { companyId: policy.companyId, planId: null, effectiveFrom: { lte: new Date() } },
+        orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+      });
+      const period = this.previousPeriod(version?.cycleType ?? policy.cycleType, version ? version.customDays : policy.customDays);
+      if (!period) {
+        skipped.push(policy.companyId);
+        continue;
+      }
+      const existing = await this.prisma.settlement.findUnique({
+        where: { companyId_periodStart_periodEnd: { companyId: policy.companyId, periodStart: period.start, periodEnd: period.end } },
+      });
+      if (existing) {
+        skipped.push(existing.code);
+        continue;
+      }
+      const admin = await this.prisma.user.findFirst({ where: { role: 'ADMIN', disabled: false }, select: { id: true } });
+      const settlement = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.settlement.create({
+          data: {
+            code: await nextCode(tx, 'JS'),
+            companyId: policy.companyId,
+            periodStart: period.start,
+            periodEnd: period.end,
+            status: 'PENDING_ENTRY',
+            referenceCny: new Prisma.Decimal(0),
+            policyVersionId: version?.id ?? null,
+          },
+        });
+        if (admin) {
+          await tx.settlementLog.create({
+            data: {
+              settlementId: row.id,
+              action: '定时任务自动生成结算单',
+              actorId: admin.id,
+              after: { periodStart: period.start.toISOString(), periodEnd: period.end.toISOString() },
+            },
+          });
+        }
+        return row;
+      });
+      created.push(settlement.code);
+    }
+    const message = `[ST-02] 自动生成结算单：新建 ${created.length}，跳过 ${skipped.length}`;
+    this.log.log(message);
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const finance = await this.prisma.user.findMany({ where: { role: { in: ['FINANCE', 'OPS_MANAGER'] }, disabled: false }, select: { id: true } });
+    await this.notifications.pushMany(finance.map((row) => row.id), {
+      type: 'ST02_GENERATE',
+      title: message,
+      body: created.length ? `新建 ${created.join('、')}` : '本周期没有新的结算单。',
+      entityType: 'Settlement',
+      entityId: today,
+    });
+    await this.audit.write(null, 'job.settlement-generate', 'Job', today, { message, created, skipped });
+    return { job: 'settlement-generate', created, skipped, message };
+  }
+
+  private async alertRatios() {
+    const saved = await this.settings.all();
+    const warn = Number(saved.slaWarnRatio);
+    const dbl = Number(saved.slaDoubleRatio);
+    return {
+      slaWarnRatio: Number.isFinite(warn) && warn > 0 ? warn : this.schedule.slaWarnRatio,
+      slaDoubleRatio: Number.isFinite(dbl) && dbl > 0 ? dbl : this.schedule.slaDoubleRatio,
+    };
+  }
+
+  private halfHourSlot() {
+    const now = new Date();
+    const slot = new Date(Math.floor(now.getTime() / (30 * 60 * 1000)) * 30 * 60 * 1000);
+    return slot.toISOString();
+  }
+
+  private yesterdayIso() {
+    const formatted = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    return formatted;
+  }
+
+  private previousPeriod(cycleType: string, customDays: number | null) {
+    const today = new Date();
+    if (cycleType === 'MONTH') {
+      const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 0));
+      const start = new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), 1));
+      return { start, end };
+    }
+    if (cycleType === 'QUARTER') {
+      const q = Math.floor(today.getUTCMonth() / 3);
+      const startMonth = ((q - 1 + 4) % 4) * 3;
+      const year = q === 0 ? today.getUTCFullYear() - 1 : today.getUTCFullYear();
+      const start = new Date(Date.UTC(year, startMonth, 1));
+      const end = new Date(Date.UTC(year, startMonth + 3, 0));
+      return { start, end };
+    }
+    if (cycleType === 'CUSTOM_DAYS' && customDays && customDays > 0) {
+      const end = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - 1));
+      const start = new Date(end);
+      start.setUTCDate(start.getUTCDate() - (customDays - 1));
+      return { start, end };
+    }
+    return null;
+  }
+
+}

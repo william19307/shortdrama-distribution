@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# Vite / nest / tsc build output (root-level single-file HTML prototypes are kept)
+dist/
+dist-v2/
+
+# env & logs
+.env
+.env.local
+.env.demo
+*.log
+coverage/
+
+# macOS
+.DS_Store
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

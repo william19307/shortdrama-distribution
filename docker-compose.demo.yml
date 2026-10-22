@@ -1,0 +1,86 @@
+# 本机一键演示：Postgres、MinIO、API、网页都在容器里。
+# 只把网页端口映射到宿主机。数据库和对象存储不对外。
+# 密码来自 .env.demo（由 start-demo.sh 从 .env.demo.example 复制）。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - demo_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+
+  minio:
+    image: bitnamilegacy/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # 这套 MinIO 的桶 CORS 接口返回未实现。全局允许来源后，浏览器才能直传。
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    volumes:
+      - demo_minio:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo >/dev/tcp/127.0.0.1/9000"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      NODE_ENV: production
+      SEED_DEMO: "true"
+      UPLOAD_VIA_API: "false"
+      PORT: "3000"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      WEB_ORIGIN: http://localhost:${WEB_PORT:-8080}
+      STORAGE_DRIVER: s3
+      S3_ENDPOINT: http://minio:9000
+      PUBLIC_OBJECT_URL: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: shortform
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_FORCE_PATH_STYLE: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_SHOW_DEMOS: "true"
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  demo_pg:
+  demo_minio:

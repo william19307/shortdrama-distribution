@@ -1,0 +1,93 @@
+/* 核心组件参考实现（依赖 tokens.css）。类名前缀 ds-，营销站与后台通用。 */
+.ds-root{background:var(--ds-bg);color:var(--ds-text);font-family:var(--ds-font);letter-spacing:-.011em;-webkit-font-smoothing:antialiased}
+.ds-eyebrow{font-size:var(--ds-fs-eyebrow);font-weight:600;letter-spacing:var(--ds-ls-eyebrow);text-transform:uppercase;color:var(--ds-primary)}
+.ds-display{font-size:var(--ds-fs-display);line-height:var(--ds-lh-display);letter-spacing:var(--ds-ls-display);font-weight:700}
+.ds-display-sm{font-size:var(--ds-fs-display-sm);line-height:var(--ds-lh-display-sm);letter-spacing:var(--ds-ls-display-sm);font-weight:700}
+.ds-h1{font-size:var(--ds-fs-h1);line-height:var(--ds-lh-h1);letter-spacing:var(--ds-ls-h1);font-weight:700}
+.ds-grad-text{background:var(--ds-grad-text-hero);-webkit-background-clip:text;background-clip:text;color:transparent}
+.ds-lede{font-size:var(--ds-fs-lede);line-height:var(--ds-lh-lede);letter-spacing:var(--ds-ls-lede);color:var(--ds-text-2)}
+/* Button */
+.ds-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;height:52px;padding:0 28px;border-radius:var(--ds-radius-pill);font:inherit;font-weight:600;font-size:16px;border:1px solid transparent;cursor:pointer;transition:background var(--ds-dur-base),box-shadow var(--ds-dur-base),border-color var(--ds-dur-base),color var(--ds-dur-base)}
+/* 位移/缩放由 framer-motion 预设 motion.presets.buttonPress 驱动，CSS 只做颜色过渡 */
+.ds-btn:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ds-focus-ring)}
+.ds-btn--primary{background:var(--ds-primary);color:#fff;box-shadow:var(--ds-glow)}.ds-btn--primary:hover{background:var(--ds-red-hover)}
+.ds-btn--ghost{background:var(--ds-neutral-soft);color:var(--ds-text);border-color:var(--ds-border-strong);backdrop-filter:blur(20px)}.ds-btn--ghost:hover{background:var(--ds-surface-hover)}
+.ds-btn--text{background:none;color:var(--ds-text-2);padding:0 12px}.ds-btn--text:hover{color:var(--ds-text)}
+.ds-btn--sm{height:36px;padding:0 16px;font-size:14px}.ds-btn--xs{height:28px;padding:0 12px;font-size:13px}
+.ds-btn:disabled{background:var(--ds-surface-2);color:var(--ds-text-disabled);border-color:var(--ds-border);cursor:not-allowed;box-shadow:none}
+/* Poster card */
+.ds-poster{position:relative;border-radius:var(--ds-radius-sm);overflow:hidden;aspect-ratio:2/3;background:var(--ds-surface);cursor:pointer;transition:box-shadow var(--ds-dur-slow) var(--ds-ease-out);outline:none}
+.ds-poster:hover,.ds-poster:focus-visible{box-shadow:var(--ds-shadow-lg);z-index:2} /* 缩放：motion.presets.cardHover */
+.ds-poster__art{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:14px;color:#fff}
+.ds-poster__title{font-size:22px;font-weight:700;letter-spacing:-.04em;line-height:1}
+.ds-poster__kicker{font-size:9px;letter-spacing:.3em;opacity:.75;font-weight:600;margin-bottom:6px;text-transform:uppercase}
+.ds-poster__info{position:absolute;inset:auto 0 0;padding:40px 12px 12px;background:linear-gradient(#0000,#000e 40%);color:#fff;opacity:0;transition:opacity var(--ds-dur-slow) var(--ds-ease-out);font-size:12px}
+.ds-poster:hover .ds-poster__info,.ds-poster:focus-visible .ds-poster__info{opacity:1}
+.ds-poster__badge{position:absolute;top:8px;left:8px;z-index:1}
+.ds-cover{display:flex;gap:12px;align-items:center}.ds-cover .ds-poster{width:44px;flex:0 0 44px;border-radius:6px}.ds-cover .ds-poster:hover{box-shadow:none}
+.ds-cover b{display:block;font-weight:600;font-size:var(--ds-fs-ui)}.ds-cover small{color:var(--ds-text-3);font-size:12px}
+/* Stat card */
+.ds-stat{padding:var(--ds-card-pad);border-radius:var(--ds-radius-xl);background:var(--ds-grad-bento);border:1px solid var(--ds-border);position:relative;overflow:hidden}
+.ds-stat::before{content:"";position:absolute;inset:0;background:var(--ds-grad-spotlight);pointer-events:none}
+.ds-stat__label{font-size:13px;color:var(--ds-text-3);font-weight:600}
+.ds-stat__value{font-size:56px;font-weight:700;letter-spacing:-.05em;font-feature-settings:"tnum" 1,"cv11" 1;line-height:1.05;margin-top:10px;background:var(--ds-grad-text-stat);-webkit-background-clip:text;background-clip:text;color:transparent;font-variant-numeric:tabular-nums}
+.ds-stat__value small{font-size:.45em;letter-spacing:-.02em}
+.ds-stat__delta{display:inline-flex;align-items:center;gap:4px;font-size:12.5px;font-weight:600;margin-top:10px;padding:2px 8px;border-radius:99px;font-variant-numeric:tabular-nums}
+.ds-stat__delta.up{color:var(--ds-success);background:var(--ds-success-soft)}.ds-stat__delta.down{color:var(--ds-error);background:var(--ds-error-soft)}
+[data-density="compact"] .ds-stat{border-radius:var(--ds-radius-lg)}[data-density="compact"] .ds-stat__value{font-size:28px;font-weight:600;letter-spacing:-.03em}
+/* Bento */
+.ds-bento{display:grid;grid-template-columns:repeat(6,1fr);grid-auto-rows:240px;gap:var(--ds-grid-gap)}
+.ds-tile{border-radius:var(--ds-radius-xxl);background:var(--ds-grad-bento);border:1px solid var(--ds-border);padding:30px;display:flex;flex-direction:column;overflow:hidden;position:relative;transition:border-color var(--ds-dur-slow)}
+.ds-tile:hover{border-color:var(--ds-border-strong)}.ds-tile__k{font-size:13px;color:var(--ds-text-3);font-weight:600;margin-bottom:8px}
+.ds-tile h4{font-size:var(--ds-fs-h3);letter-spacing:var(--ds-ls-h3);line-height:var(--ds-lh-h3);font-weight:700;max-width:340px}
+.ds-tile__v{flex:1;position:relative;margin-top:16px;min-height:0}
+/* Status badge */
+.ds-badge{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:var(--ds-radius-pill);font-size:12px;font-weight:500;white-space:nowrap;line-height:1}
+.ds-badge__dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 6px}
+.ds-badge--neutral{color:var(--ds-text-2);background:var(--ds-neutral-soft)}
+.ds-badge--warning,.ds-badge--action{color:var(--ds-action);background:var(--ds-action-soft)} /* action：需要你处理，专用琥珀黄 */
+.ds-badge--success{color:var(--ds-success);background:var(--ds-success-soft)}
+.ds-badge--error{color:var(--ds-error);background:var(--ds-error-soft)}
+.ds-badge--info{color:var(--ds-info);background:var(--ds-info-soft)}
+.ds-badge--settle{color:var(--ds-settle);background:var(--ds-settle-soft)} /* 待结算：资金流转中 */
+.ds-badge--brand{color:var(--ds-primary-text);background:var(--ds-primary-soft)}
+/* Empty */
+.ds-empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:48px 24px;gap:10px;border:1px dashed var(--ds-border-strong);border-radius:var(--ds-radius-xl)}
+.ds-empty__icon{width:72px;height:72px;border-radius:22px;display:grid;place-items:center;background:var(--ds-primary-soft);color:var(--ds-primary-text);font-size:30px;line-height:1;box-shadow:var(--ds-glow-strong);margin-bottom:8px}
+.ds-empty h5{font-size:18px;letter-spacing:-.02em}.ds-empty p{color:var(--ds-text-3);font-size:14px;max-width:320px}
+.ds-num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"cv11" 1}
+.ds-cover .ds-poster__art{padding:4px}.ds-cover .ds-poster__kicker{display:none}.ds-cover .ds-poster__title{font-size:9px;letter-spacing:-.02em}.ds-cover .ds-poster__info{display:none}
+[data-density="compact"] .ds-cover .ds-poster{width:30px;flex-basis:30px;border-radius:4px}[data-density="compact"] .ds-cover .ds-poster__title{display:none}
+.ds-poster__badge .ds-badge{background:rgba(0,0,0,.6);backdrop-filter:blur(8px)}[data-theme="light"] .ds-poster__badge .ds-badge--action{color:#FACC15}[data-theme="light"] .ds-poster__badge .ds-badge--success{color:#34D399}[data-theme="light"] .ds-poster__badge .ds-badge--info{color:#60A5FA}
+
+/* 图标：统一 @ant-design/icons（Outlined），尺寸随 font-size，颜色随 currentColor */
+.ds-icon-box{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:12px;background:var(--ds-neutral-soft);color:var(--ds-text);font-size:18px}
+
+/* 金额列：右对齐 + 500 + 等宽数字（antd 用 antdTheme.amountColumn() 自动挂 className） */
+.ds-amount,td.ds-amount,th.ds-amount-th{text-align:right!important;font-weight:500;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1,"cv11" 1;white-space:nowrap}
+.ds-amount--neg{color:var(--ds-error)}
+/* 新消息徽标：品牌红（区别于 error 橙红），圆点 8px / 计数 18px */
+.ds-new-badge{display:inline-grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:99px;background:var(--ds-red);color:#fff;font-size:11px;font-weight:600;font-variant-numeric:tabular-nums;box-shadow:0 0 0 2px var(--ds-bg)}
+.ds-new-badge--dot{min-width:8px;width:8px;height:8px;padding:0}
+/* 平台：logo 徽章（solid 底白字）与同步徽章（fg 文字+描边） */
+.ds-plat-logo{display:inline-grid;place-items:center;width:32px;height:32px;border-radius:9px;color:#fff;font-size:11px;font-weight:700;letter-spacing:-.02em;flex:0 0 auto}
+.ds-plat-logo--sm{width:22px;height:22px;border-radius:6px;font-size:9px}
+.ds-plat-sync{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:99px;border:1px solid currentColor;font-size:12px;font-weight:500}
+
+/* 排名 RankBadge：1–3 名奖牌（图标 + 名次数字），4 名起普通等宽数字。仅用于排行榜。 */
+.ds-rank{display:inline-flex;align-items:center;justify-content:center;gap:3px;font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;line-height:1;white-space:nowrap;flex:0 0 auto}
+.ds-rank--sm{min-width:24px;height:24px;font-size:13px}
+.ds-rank--lg{min-width:40px;height:40px;font-size:18px}
+/* 普通名次：克制，无底色，次级灰 */
+.ds-rank--plain{color:var(--ds-text-3);font-weight:500}
+.ds-rank--plain.ds-rank--lg{min-width:36px;height:36px;border-radius:10px;background:rgba(0,0,0,.55);color:#fff;backdrop-filter:blur(8px);font-weight:600}
+/* 奖牌 sm：soft 底 + main 描边 + 图标(main) + 数字(text) */
+.ds-rank--medal.ds-rank--sm{padding:0 7px 0 6px;border-radius:99px;font-weight:700;font-size:12.5px;background:var(--rk-soft);color:var(--rk-text);box-shadow:inset 0 0 0 1px var(--rk-main)}
+.ds-rank--medal.ds-rank--sm .anticon{color:var(--rk-main);font-size:12px}
+/* 奖牌 lg（封面角标）：实心 main 底 + onMain 数字与图标，带细描边以适配任意封面 */
+.ds-rank--medal.ds-rank--lg{padding:0 10px;border-radius:12px;font-weight:700;background:var(--rk-main);color:var(--rk-on);box-shadow:0 6px 18px -6px rgba(0,0,0,.6),inset 0 0 0 1px rgba(255,255,255,.25)}
+.ds-rank--medal.ds-rank--lg .anticon{font-size:16px}
+.ds-rank--gold{--rk-main:var(--ds-rank-gold);--rk-soft:var(--ds-rank-gold-soft);--rk-text:var(--ds-rank-gold-text);--rk-on:var(--ds-rank-gold-on)}
+.ds-rank--silver{--rk-main:var(--ds-rank-silver);--rk-soft:var(--ds-rank-silver-soft);--rk-text:var(--ds-rank-silver-text);--rk-on:var(--ds-rank-silver-on)}
+.ds-rank--bronze{--rk-main:var(--ds-rank-bronze);--rk-soft:var(--ds-rank-bronze-soft);--rk-text:var(--ds-rank-bronze-text);--rk-on:var(--ds-rank-bronze-on)}
+.ds-rank--top-left,.ds-rank--top-right{position:absolute;top:8px;z-index:3}.ds-rank--top-left{left:8px}.ds-rank--top-right{right:8px}

@@ -1,0 +1,121 @@
+import { Body, Controller, Get, Param, Patch, Post, Put, Query, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { pageSchema, platformCreateSchema, platformPatchSchema, settingsSchema, taskCreateSchema, userCreateSchema, userPatchSchema } from '@shortform/shared';
+import { Response } from 'express';
+import { z } from 'zod';
+import { AuthUser, CurrentUser, JwtAuthGuard } from '../core/auth';
+import { ZodPipe } from '../core/zod.pipe';
+import { AdminService, logQuery } from './admin.service';
+
+@Controller()
+@UseGuards(JwtAuthGuard)
+export class AdminController {
+  constructor(private readonly admin: AdminService) {}
+
+  @Get('workbench')
+  workbench(@CurrentUser() user: AuthUser) {
+    return this.admin.workbench(user);
+  }
+
+  @Get('admin/assignees')
+  assignees(@CurrentUser() user: AuthUser) {
+    return this.admin.assignees(user);
+  }
+
+  @Get('admin/users')
+  users(@CurrentUser() user: AuthUser, @Query(new ZodPipe(pageSchema)) query: z.infer<typeof pageSchema>) {
+    return this.admin.users(user, query);
+  }
+
+  @Post('admin/users')
+  createUser(@CurrentUser() user: AuthUser, @Body(new ZodPipe(userCreateSchema)) body: z.infer<typeof userCreateSchema>) {
+    return this.admin.createUser(user, body);
+  }
+
+  @Patch('admin/users/:id')
+  patchUser(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(userPatchSchema)) body: z.infer<typeof userPatchSchema>) {
+    return this.admin.patchUser(user, id, body);
+  }
+
+  @Get('admin/settings')
+  settings(@CurrentUser() user: AuthUser) {
+    return this.admin.getSettings(user);
+  }
+
+  @Put('admin/settings')
+  putSettings(@CurrentUser() user: AuthUser, @Body(new ZodPipe(settingsSchema)) body: z.infer<typeof settingsSchema>) {
+    return this.admin.putSettings(user, body);
+  }
+
+  @Get('platforms')
+  platforms() {
+    return this.admin.platforms();
+  }
+
+  @Post('platforms')
+  createPlatform(@CurrentUser() user: AuthUser, @Body(new ZodPipe(platformCreateSchema)) body: z.infer<typeof platformCreateSchema>) {
+    return this.admin.createPlatform(user, body);
+  }
+
+  @Post('platforms/:id/logo')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }))
+  uploadLogo(
+    @CurrentUser() user: AuthUser,
+    @Param('id') id: string,
+    @UploadedFile() file?: { buffer: Buffer; mimetype?: string; originalname?: string },
+  ) {
+    return this.admin.uploadLogo(user, id, file);
+  }
+
+  @Patch('platforms/:id')
+  patchPlatform(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(platformPatchSchema)) body: z.infer<typeof platformPatchSchema>) {
+    return this.admin.patchPlatform(user, id, body);
+  }
+
+  @Post('platforms/roster-requests/:id/confirm')
+  confirmRoster(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.confirmRoster(user, id);
+  }
+
+  @Post('platforms/roster-requests/:id/reject')
+  rejectRoster(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body(new ZodPipe(z.object({ note: z.string().max(200).optional() }))) body: { note?: string }) {
+    return this.admin.rejectRoster(user, id, body.note);
+  }
+
+  @Get('audit-logs')
+  logs(@CurrentUser() user: AuthUser, @Query(new ZodPipe(logQuery)) query: z.infer<typeof logQuery>) {
+    return this.admin.logs(user, query);
+  }
+
+  @Get('tasks')
+  tasks(@CurrentUser() user: AuthUser, @Query(new ZodPipe(pageSchema)) query: z.infer<typeof pageSchema>) {
+    return this.admin.tasks(user, query);
+  }
+
+  @Post('tasks')
+  createTask(@CurrentUser() user: AuthUser, @Body(new ZodPipe(taskCreateSchema)) body: z.infer<typeof taskCreateSchema>) {
+    return this.admin.createTask(user, body);
+  }
+
+  @Post('tasks/:id/step')
+  stepTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.stepTask(user, id);
+  }
+
+  @Post('tasks/:id/retry')
+  retryTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.retryTask(user, id);
+  }
+
+  @Post('tasks/:id/cancel')
+  cancelTask(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.admin.cancelTask(user, id);
+  }
+
+  @Get('tasks/:id/report')
+  async report(@CurrentUser() user: AuthUser, @Param('id') id: string, @Res() res: Response) {
+    const csv = await this.admin.report(user, id);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.send(`\uFEFF${csv}`);
+  }
+}

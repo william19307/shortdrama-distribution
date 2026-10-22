@@ -1,0 +1,1074 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CLIENT
+  OPS
+  OPS_MANAGER
+  BD
+  FINANCE
+  ADMIN
+}
+
+enum CertStatus {
+  UNVERIFIED
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGE_PENDING
+}
+
+enum PlanRound {
+  FIRST
+  SECOND
+}
+
+enum PlanStatus {
+  PRECHECK_FAILED
+  PENDING_ASSIGN
+  PENDING_REVIEW
+  IN_REVIEW
+  NEEDS_REVISION
+  SHARE_CONFIG
+  SHARE_REVIEW
+  APPROVED
+  DISTRIBUTING
+  LIVE
+  OFFLINE
+  WITHDRAWN
+}
+
+enum EpisodeReviewStatus {
+  UNSAMPLED
+  PENDING
+  APPROVED
+  REJECTED
+  REPLACED
+}
+
+enum ListingStatus {
+  PENDING_CONTACT
+  IN_CONTACT
+  REJECTED_BY_PLATFORM
+  PENDING_LISTING
+  LISTED
+  DELISTED
+}
+
+enum ShareMode {
+  MG
+  MG_OVER
+  NO_MG
+}
+
+enum ShareReviewStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TicketType {
+  REVIEW
+  WATERMARK
+  DATA_DISPUTE
+  SETTLEMENT_DISPUTE
+}
+
+enum TicketStatus {
+  CREATED
+  PENDING_CLIENT
+  READ
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum ContractType {
+  DISTRIBUTION
+  SUPPLEMENT
+}
+
+enum ContractStatus {
+  APPLYING
+  DRAFTING
+  PENDING_SIGN
+  PENDING_CONFIRM
+  EFFECTIVE
+  EXPIRED
+}
+
+enum SettlementStatus {
+  PENDING_ENTRY
+  PENDING_REVIEW
+  NO_SETTLEMENT
+  PENDING_APPLY
+  BELOW_MINIMUM
+  VERIFYING
+  PENDING_INVOICE
+  INVOICE_REVIEW
+  PAYING
+  PAID
+}
+
+enum DailyStatus {
+  DRAFT
+  REVIEWED
+  ANOMALY
+  LOCKED
+}
+
+enum DealType {
+  NO_MG
+  MG_SHARE
+  BUYOUT
+}
+
+enum DataSource {
+  SCREENSHOT
+  REPORT_EMAIL
+  BD_NOTE
+}
+
+enum SyncLag {
+  T1
+  T2
+}
+
+enum SyncMode {
+  MANUAL
+  API
+}
+
+enum CycleType {
+  MONTH
+  QUARTER
+  CUSTOM_DAYS
+}
+
+enum AssetReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AssetType {
+  LICENSE
+  COPYRIGHT
+  POSTER
+  SUBTITLE
+  TRAILER
+}
+
+enum UploadPurpose {
+  EPISODE
+  COVER
+  LICENSE
+  COPYRIGHT
+  INVOICE
+  VOUCHER
+  WATERMARK_SOURCE
+  CONTRACT
+}
+
+enum UploadStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+}
+
+enum WatermarkStatus {
+  ARCHIVED
+  PENDING_MATCH
+}
+
+enum WatermarkKind {
+  LISTING
+  DATA
+  DELIST
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role
+  disabled     Boolean  @default(false)
+  companyId    String?
+  company      Company? @relation("CompanyMembers", fields: [companyId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ownedCompanies Company[] @relation("CompanyOwner")
+  bdCompanies    Company[] @relation("CompanyBd")
+  auditLogs      AuditLog[]
+  tasks          AsyncTask[]
+  notifications  Notification[]
+  importBatches  DailyImportBatch[]
+  importTemplates ImportFieldTemplate[]
+  dramaAliases   DramaAlias[] @relation("AliasAuthor")
+
+  @@index([role])
+  @@index([companyId])
+}
+
+model Company {
+  id            String     @id @default(cuid())
+  name          String
+  creditCode    String?
+  legalPerson   String?
+  contactName   String?
+  contactPhone  String?
+  licenseKey    String?
+  certStatus    CertStatus @default(UNVERIFIED)
+  certRejectReason String?
+  certDraft     Json?
+  /// 认证向导草稿。certDraft 仍表示已认证企业的变更待审内容。
+  certWizard    Json?
+  certWizardStep Int      @default(0)
+  ownerId       String?
+  owner         User?      @relation("CompanyOwner", fields: [ownerId], references: [id])
+  bdId          String?
+  bd            User?      @relation("CompanyBd", fields: [bdId], references: [id])
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  members       User[]     @relation("CompanyMembers")
+  bankAccounts  BankAccount[]
+  dramas        Drama[]
+  assets        Asset[]
+  plans         DistributionPlan[]
+  tickets       Ticket[]
+  contracts     Contract[]
+  settlements   Settlement[]
+  withdrawals   Withdrawal[]
+  policy        SettlementPolicy?
+  dailyStats    DailyStat[]
+  watermarks    WatermarkShot[]
+
+  @@index([certStatus])
+  @@index([ownerId])
+  @@index([bdId])
+  @@index([name])
+}
+
+model BankAccount {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  accountName String
+  bankName    String
+  branch      String?
+  accountNo   String
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  withdrawals Withdrawal[]
+
+  @@index([companyId])
+}
+
+model Platform {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String   @unique
+  region     String   @default("")
+  enabled    Boolean  @default(true)
+  firstBatch Boolean  @default(false)
+  sort       Int      @default(0)
+  syncMode   SyncMode @default(MANUAL)
+  syncLag            SyncLag   @default(T1)
+  syncLagPending     SyncLag?
+  syncLagEffectiveOn DateTime? @db.Date
+  contact    String   @default("")
+  color      String   @default("#86868B")
+  logoKey    String?
+  proposed   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  planPlatforms PlanPlatform[]
+  shares        ShareConfig[]
+  dailyStats    DailyStat[]
+  watermarks    WatermarkShot[]
+  importBatches DailyImportBatch[]
+  syncTasks     SyncTask[]
+  importTemplates ImportFieldTemplate[]
+  dramaAliases  DramaAlias[]
+  rosterRequests PlatformRosterRequest[]
+
+  @@index([firstBatch, enabled, sort])
+}
+
+model Drama {
+  id                   String   @id @default(cuid())
+  code                 String   @unique
+  companyId            String
+  company              Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title                String
+  titleEn              String   @default("")
+  nameNorm             String
+  synopsis             String   @default("")
+  genre                String   @default("")
+  language             String   @default("英语")
+  episodeCountExpected Int?
+  coverKey             String?
+  tags                 String[] @default([])
+  groups               String[] @default([])
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  episodes  Episode[]
+  assets    Asset[]
+  plans     DistributionPlan[]
+  dailyStats DailyStat[]
+  settlementLines SettlementLine[]
+  contractDramas ContractDrama[]
+  watermarks WatermarkShot[]
+  tickets    Ticket[]
+  aliases    DramaAlias[]
+
+  @@index([companyId, updatedAt(sort: Desc)])
+  @@index([companyId, createdAt])
+  @@index([companyId, nameNorm])
+}
+
+model Episode {
+  id           String              @id @default(cuid())
+  dramaId      String
+  drama        Drama               @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  no           Int
+  title        String              @default("")
+  fileKey      String?
+  fileName     String?
+  fileSize     BigInt?
+  contentType  String?
+  fingerprint  String?
+  reviewStatus EpisodeReviewStatus @default(PENDING)
+  techStatus   String              @default("NONE")
+  techNote     String              @default("")
+  durationSec  Int?
+  width        Int?
+  height       Int?
+  rejectReason String?
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@unique([dramaId, no])
+  @@index([fingerprint])
+}
+
+model Asset {
+  id           String            @id @default(cuid())
+  companyId    String
+  company      Company           @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  dramaId      String?
+  drama        Drama?            @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  type         AssetType
+  name         String
+  fileKey      String
+  reviewStatus AssetReviewStatus @default(PENDING)
+  reviewedById String?
+  reviewedAt   DateTime?
+  rejectReason String?
+  createdAt    DateTime          @default(now())
+
+  @@index([companyId, type])
+  @@index([dramaId, type])
+  @@index([reviewStatus])
+}
+
+model UploadSession {
+  id           String        @id @default(cuid())
+  companyId    String
+  key          String
+  uploadId     String?
+  purpose      UploadPurpose
+  fileName     String
+  contentType  String
+  size         BigInt
+  fingerprint  String?
+  partSize     Int?
+  parts        Json?
+  status       UploadStatus  @default(PENDING)
+  dramaId      String?
+  episodeNo    Int?
+  expiresAt    DateTime
+  createdAt    DateTime      @default(now())
+
+  @@index([companyId, fingerprint])
+  @@index([expiresAt])
+}
+
+model DistributionPlan {
+  id            String     @id @default(cuid())
+  code          String     @unique
+  dramaId       String
+  drama         Drama      @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  companyId     String
+  company       Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  round         PlanRound
+  status        PlanStatus
+  assigneeId    String?
+  precheckNote  String?
+  rejectSummary String?
+  submittedAt   DateTime   @default(now())
+  slaDueAt      DateTime?
+  resubmitCount Int        @default(0)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  platforms PlanPlatform[]
+  shares    ShareConfig[]
+  reviewLogs ReviewLog[]
+  spotChecks ReviewSpotCheck[]
+  policy    ProjectSettlementPolicy?
+  contracts Contract[]
+  tickets   Ticket[]
+
+  @@index([companyId, status])
+  @@index([assigneeId, status])
+  @@index([dramaId, round])
+  @@index([status, slaDueAt])
+}
+
+model PlanPlatform {
+  id              String        @id @default(cuid())
+  planId          String
+  plan            DistributionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  platformId      String
+  platform        Platform      @relation(fields: [platformId], references: [id])
+  platformName    String
+  listingStatus   ListingStatus @default(PENDING_CONTACT)
+  platformDramaId String?
+  listingUrl      String?
+  listedAt        DateTime?
+
+  @@unique([planId, platformId])
+  @@index([platformId, listingStatus])
+}
+
+model ShareConfig {
+  id                  String            @id @default(cuid())
+  planId              String
+  plan                DistributionPlan  @relation(fields: [planId], references: [id], onDelete: Cascade)
+  platformId          String
+  platform            Platform          @relation(fields: [platformId], references: [id])
+  mode                ShareMode
+  clientRate          Decimal           @db.Decimal(6, 2)
+  overRate            Decimal?          @db.Decimal(6, 2)
+  guaranteeAmount     Decimal?          @db.Decimal(18, 2)
+  guaranteeCurrency   String?
+  guaranteePeriodDays Int?
+  reviewStatus        ShareReviewStatus @default(DRAFT)
+  submittedById       String?
+  reviewedById        String?
+  reviewNote          String?
+  templateId          String?
+  templateVersion     Int?
+  updatedAt           DateTime          @updatedAt
+
+  @@unique([planId, platformId])
+}
+
+/// 批量驳回原因字典。停用即可，不物理删除，历史工单保留原文。
+model RejectReason {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  category  String
+  title     String
+  template  String
+  enabled   Boolean  @default(true)
+  sort      Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([enabled, sort])
+}
+
+model ReviewLog {
+  id        String   @id @default(cuid())
+  planId    String
+  plan      DistributionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  episodeId String?
+  episodeNo Int?
+  action    String
+  reason    String?
+  actorId   String
+  createdAt DateTime @default(now())
+
+  @@index([planId, createdAt])
+}
+
+model DailyStat {
+  id               String      @id @default(cuid())
+  recordId         String      @unique
+  companyId        String
+  company          Company     @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  platformId       String
+  platform         Platform    @relation(fields: [platformId], references: [id])
+  dramaId          String
+  drama            Drama       @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  statDate         DateTime    @db.Date
+  statTimezone     String
+  contractCode     String      @default("")
+  platformDramaId  String      @default("")
+  titleLocal       String
+  language         String
+  territory        String      @default("")
+  episodesOnline   Int
+  views            Int
+  viewMetricDef    String
+  uniqueViewers    Int?
+  paidUnlocks      Int?
+  grossRevenue     Decimal?    @db.Decimal(18, 4)
+  netRevenue       Decimal?    @db.Decimal(18, 4)
+  currency         String
+  shareRate        Decimal?    @db.Decimal(6, 2)
+  mgAmount         Decimal?    @db.Decimal(18, 2)
+  mgRecouped       Decimal?    @db.Decimal(18, 2)
+  revenueShareDue  Decimal?    @db.Decimal(18, 2)
+  dealType         DealType
+  dataSource       DataSource
+  evidenceFiles    String      @default("")
+  evidenceSha256   String      @default("")
+  watermarkId      String?
+  anomalyNote      String      @default("")
+  status           DailyStatus @default(DRAFT)
+  lagWarning       String?
+  enteredById      String
+  enteredAt        DateTime    @default(now())
+  reviewedById     String?
+  reviewedAt       DateTime?
+  lockedAt         DateTime?
+  version          Int         @default(1)
+
+  @@unique([platformId, statDate, dramaId, language])
+  @@index([dramaId, statDate])
+  @@index([companyId, statDate])
+  @@index([platformId, statDate])
+}
+
+model WatermarkShot {
+  id             String          @id @default(cuid())
+  companyId      String?
+  company        Company?        @relation(fields: [companyId], references: [id])
+  dramaId        String?
+  drama          Drama?          @relation(fields: [dramaId], references: [id])
+  platformId     String?
+  platform       Platform?       @relation(fields: [platformId], references: [id])
+  shotDate       DateTime?       @db.Date
+  kind           WatermarkKind   @default(DATA)
+  originalKey    String
+  watermarkedKey String?
+  sha256         String          @default("")
+  shortHash      String          @default("")
+  filename       String          @default("")
+  status         WatermarkStatus @default(PENDING_MATCH)
+  failReason     String?
+  operatorId     String
+  batchNo        String          @default("")
+  ticketId       String?
+  ticketCode     String          @default("")
+  ticket         Ticket?         @relation(fields: [ticketId], references: [id])
+  createdAt      DateTime        @default(now())
+
+  @@index([dramaId, shotDate])
+  @@index([status])
+  @@index([companyId, shotDate])
+  @@index([batchNo])
+}
+
+model Ticket {
+  id        String       @id @default(cuid())
+  code      String       @unique
+  companyId String
+  company   Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  type      TicketType
+  status    TicketStatus @default(PENDING_CLIENT)
+  title     String
+  body      String       @default("")
+  dramaId   String?
+  drama     Drama?       @relation(fields: [dramaId], references: [id])
+  planId    String?
+  plan      DistributionPlan? @relation(fields: [planId], references: [id])
+  createdById String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  messages TicketMessage[]
+  shots    WatermarkShot[]
+
+  @@index([companyId, type, status])
+  @@index([companyId, createdAt])
+}
+
+model TicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId  String
+  authorName String
+  content   String
+  createdAt DateTime @default(now())
+
+  @@index([ticketId, createdAt])
+}
+
+model Contract {
+  id        String         @id @default(cuid())
+  code      String         @unique
+  companyId String
+  company   Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  planId    String?
+  plan      DistributionPlan? @relation(fields: [planId], references: [id])
+  title     String
+  type      ContractType   @default(DISTRIBUTION)
+  status    ContractStatus @default(APPLYING)
+  note      String         @default("")
+  fileKey   String?
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  dramas ContractDrama[]
+
+  @@index([companyId, status])
+}
+
+model ContractDrama {
+  contractId String
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  dramaId    String
+  drama      Drama    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+
+  @@id([contractId, dramaId])
+  @@index([dramaId])
+}
+
+model SettlementPolicy {
+  id         String    @id @default(cuid())
+  companyId  String    @unique
+  company    Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  cycleType  CycleType @default(MONTH)
+  customDays Int?
+  anchorDate DateTime  @db.Date
+  note       String    @default("")
+  updatedAt  DateTime  @updatedAt
+}
+
+model ProjectSettlementPolicy {
+  id            String    @id @default(cuid())
+  planId        String    @unique
+  plan          DistributionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  cycleType     CycleType
+  customDays    Int?
+  anchorDate    DateTime  @db.Date
+  note          String    @default("")
+  carryoverNote String    @default("")
+  updatedAt     DateTime  @updatedAt
+}
+
+model Settlement {
+  id           String           @id @default(cuid())
+  code         String           @unique
+  companyId    String
+  company      Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  periodStart  DateTime         @db.Date
+  periodEnd    DateTime         @db.Date
+  status       SettlementStatus @default(PENDING_ENTRY)
+  amountCny    Decimal?         @db.Decimal(18, 2)
+  referenceCny Decimal?         @db.Decimal(18, 2)
+  internalNote String           @default("")
+  clientNote   String           @default("")
+  enteredById  String?
+  enteredAt    DateTime?
+  reviewedById String?
+  reviewedAt   DateTime?
+  deviationPct Decimal?         @db.Decimal(8, 2)
+  withdrawalId String?
+  withdrawal   Withdrawal?      @relation(fields: [withdrawalId], references: [id])
+  policyVersionId String?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  lines SettlementLine[]
+  logs  SettlementLog[]
+
+  @@unique([companyId, periodStart, periodEnd])
+  @@index([companyId, status])
+  @@index([status])
+}
+
+model SettlementLine {
+  id               String     @id @default(cuid())
+  settlementId     String
+  settlement       Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  dramaId          String
+  drama            Drama      @relation(fields: [dramaId], references: [id])
+  platformId       String
+  platformName     String
+  currency         String
+  originalAmount   Decimal    @db.Decimal(18, 4)
+  rateValue        Decimal?   @db.Decimal(18, 6)
+  rateDate         DateTime?  @db.Date
+  rateSource       String     @default("")
+  referenceCny     Decimal?   @db.Decimal(18, 2)
+  shareMode        String     @default("")
+  clientRate       Decimal?   @db.Decimal(6, 2)
+  guaranteeAmount  Decimal?   @db.Decimal(18, 2)
+  lineAmountCny    Decimal?   @db.Decimal(18, 2)
+
+  @@index([settlementId])
+  @@index([dramaId])
+}
+
+model SettlementLog {
+  id           String   @id @default(cuid())
+  settlementId String
+  settlement   Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  action       String
+  actorId      String
+  before       Json?
+  after        Json?
+  reason       String   @default("")
+  createdAt    DateTime @default(now())
+
+  @@index([settlementId, createdAt])
+}
+
+model Withdrawal {
+  id              String           @id @default(cuid())
+  code            String           @unique
+  companyId       String
+  company         Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  bankAccountId   String
+  bankAccount     BankAccount      @relation(fields: [bankAccountId], references: [id])
+  amountCny       Decimal          @db.Decimal(18, 2)
+  status          SettlementStatus
+  invoiceKey      String?
+  invoiceNo       String?
+  invoiceRejectReason String?
+  voucherKey      String?
+  paidAt          DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  settlements Settlement[]
+
+  @@index([companyId, status])
+}
+
+model ExchangeRate {
+  id          String    @id @default(cuid())
+  pair        String
+  rateDate    DateTime  @db.Date
+  value       Decimal   @db.Decimal(18, 6)
+  source      String
+  createdById String?
+  createdAt   DateTime  @default(now())
+  voidedAt    DateTime?
+  voidReason  String?
+
+  @@index([pair, rateDate])
+}
+
+model SystemSetting {
+  key         String   @id
+  value       String
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actor      User?    @relation(fields: [actorId], references: [id])
+  action     String
+  entityType String
+  entityId   String   @default("")
+  detail     Json?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model AsyncTask {
+  id         String    @id @default(cuid())
+  type       String
+  name       String
+  ownerId    String
+  owner      User      @relation(fields: [ownerId], references: [id])
+  status     String
+  total      Int       @default(0)
+  succeeded  Int       @default(0)
+  failed     Int       @default(0)
+  skipped    Int       @default(0)
+  items      Json?
+  cancelRequested Boolean @default(false)
+  parentId   String?
+  idempotencyKey String?
+  result     Json?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([ownerId, createdAt(sort: Desc)])
+}
+
+model SlaAlert {
+  id        String   @id @default(cuid())
+  planId    String
+  tier      String
+  dueAt     DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([planId, tier, dueAt])
+}
+
+model IdempotencyKey {
+  id        String   @id
+  userId    String
+  body      Json
+  createdAt DateTime @default(now())
+}
+
+model Counter {
+  id    String @id
+  value Int
+}
+
+model Notification {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type       String
+  title      String
+  body       String    @default("")
+  entityType String?
+  entityId   String?
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, readAt])
+  @@index([type, entityId])
+}
+
+enum SpotCheckResult {
+  PASS
+  FAIL
+  NOTE
+}
+
+model ReviewSpotCheck {
+  id          String          @id @default(cuid())
+  planId      String
+  plan        DistributionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  checkedById String
+  result      SpotCheckResult
+  note        String          @default("")
+  createdAt   DateTime        @default(now())
+
+  @@index([planId, createdAt])
+}
+
+enum ImportBatchStatus {
+  UPLOADED
+  MAPPED
+  VALIDATED
+  PUBLISHED
+  FORCE_PUBLISHED
+  SUBMITTED_MANAGER
+}
+
+enum ImportRowStatus {
+  OK
+  ERROR
+  EXCLUDED
+  PUBLISHED
+}
+
+model DailyImportBatch {
+  id                   String            @id @default(cuid())
+  code                 String            @unique
+  platformId           String?
+  platform             Platform?         @relation(fields: [platformId], references: [id])
+  fileName             String
+  status               ImportBatchStatus @default(UPLOADED)
+  mapping              Json?
+  headers              Json?
+  forceReason          String?
+  managerNote          String?
+  headerChanged        Boolean           @default(false)
+  templateVersion      Int?
+  createdById          String
+  createdBy            User              @relation(fields: [createdById], references: [id])
+  submittedToManagerAt DateTime?
+  publishedAt          DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  rows                 DailyImportRow[]
+
+  @@index([createdById, createdAt])
+  @@index([status])
+}
+
+model DailyImportRow {
+  id          String           @id @default(cuid())
+  batchId     String
+  batch       DailyImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNo       Int
+  raw         Json
+  mapped      Json?
+  status      ImportRowStatus  @default(OK)
+  errorReason String           @default("")
+  issues      Json?
+  candidates  Json?
+  rowAction   String           @default("")
+  dailyStatId String?
+  createdAt   DateTime         @default(now())
+
+  @@unique([batchId, rowNo])
+  @@index([batchId, status])
+}
+
+enum SyncTaskStatus {
+  PENDING
+  SYNCING
+  PUBLISHED
+  OVERDUE
+}
+
+model SyncTask {
+  id          String         @id @default(cuid())
+  platformId  String
+  platform    Platform       @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  statDate    DateTime       @db.Date
+  status      SyncTaskStatus @default(PENDING)
+  publishedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([platformId, statDate])
+  @@index([status, statDate])
+}
+
+model ImportFieldTemplate {
+  id          String   @id @default(cuid())
+  platformId  String
+  platform    Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  version     Int
+  mapping     Json
+  headers     Json
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@unique([platformId, version])
+}
+
+model DramaAlias {
+  id               String   @id @default(cuid())
+  platformId       String
+  platform         Platform @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  dramaId          String
+  drama            Drama    @relation(fields: [dramaId], references: [id], onDelete: Cascade)
+  aliasNorm        String
+  aliasRaw         String   @default("")
+  platformSeriesId String   @default("")
+  createdById      String
+  createdBy        User     @relation("AliasAuthor", fields: [createdById], references: [id])
+  createdAt        DateTime @default(now())
+
+  @@unique([platformId, aliasNorm])
+  @@index([platformId, platformSeriesId])
+}
+
+model PlatformRosterRequest {
+  id            String    @id @default(cuid())
+  platformId    String
+  platform      Platform  @relation(fields: [platformId], references: [id], onDelete: Cascade)
+  firstBatch    Boolean?
+  enabled       Boolean?
+  status        String    @default("PENDING")
+  requestedById String
+  decidedById   String?
+  decisionNote  String    @default("")
+  createdAt     DateTime  @default(now())
+  decidedAt     DateTime?
+
+  @@index([platformId, status])
+}
+
+model SettlementPolicyVersion {
+  id            String    @id @default(cuid())
+  companyId     String?
+  planId        String?
+  version       Int
+  cycleType     CycleType
+  customDays    Int?
+  anchorDate    DateTime  @db.Date
+  effectiveFrom DateTime  @default(now()) @db.Date
+  note          String    @default("")
+  carryoverNote String    @default("")
+  createdById   String
+  createdAt     DateTime  @default(now())
+
+  @@index([companyId, version])
+  @@index([planId, version])
+}
+
+model SettlementImportBatch {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  fileName    String
+  status      String   @default("PREVIEWED")
+  createdById String
+  createdAt   DateTime @default(now())
+  rows        SettlementImportRow[]
+
+  @@index([createdById, createdAt])
+}
+
+model SettlementImportRow {
+  id             String  @id @default(cuid())
+  batchId        String
+  batch          SettlementImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  settlementId   String?
+  settlementCode String
+  kind           String
+  amountCny      String  @default("")
+  previousAmount String  @default("")
+  internalNote   String  @default("")
+  clientNote     String  @default("")
+  reason         String  @default("")
+  errorReason    String  @default("")
+  lines          Json?
+  applied        Boolean @default(false)
+
+  @@index([batchId, kind])
+}
+
+model ShareTemplate {
+  id                  String    @id @default(cuid())
+  name                String
+  version             Int       @default(1)
+  note                String    @default("")
+  mode                ShareMode
+  clientRate          Decimal   @db.Decimal(6, 2)
+  overRate            Decimal?  @db.Decimal(6, 2)
+  guaranteeAmount     Decimal?  @db.Decimal(18, 2)
+  guaranteeCurrency   String?
+  guaranteePeriodDays Int?
+  createdById         String
+  createdAt           DateTime  @default(now())
+
+  @@index([name, version])
+}
