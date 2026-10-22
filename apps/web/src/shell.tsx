@@ -2,6 +2,7 @@ import {
   AccountBookOutlined,
   AuditOutlined,
   BankOutlined,
+  BarChartOutlined,
   BellOutlined,
   CameraOutlined,
   CloudUploadOutlined,
@@ -11,6 +12,7 @@ import {
   FileProtectOutlined,
   FileSearchOutlined,
   LogoutOutlined,
+  MenuOutlined,
   SettingOutlined,
   TeamOutlined,
   ThunderboltOutlined,
@@ -29,26 +31,62 @@ import { useDsTheme } from './theme';
 
 const { Sider, Header, Content } = Layout;
 
-interface Item { key: string; icon?: React.ReactNode; label: string; roles?: Role[] }
+interface Leaf { key: string; icon: React.ReactNode; label: string; roles: Role[] }
+interface Group { key: string; icon: React.ReactNode; label: string; children: Leaf[] }
 
-const STAFF_ITEMS: Item[] = [
-  { key: '/contracts', icon: <FileProtectOutlined />, label: '合同', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/tickets', icon: <CustomerServiceOutlined />, label: '消息与工单', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+const STAFF_NAV: Array<Leaf | Group> = [
   { key: '/workbench', icon: <DashboardOutlined />, label: '工作台', roles: ['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'] },
-  { key: '/companies', icon: <TeamOutlined />, label: '客户与资质', roles: ['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'] },
-  { key: '/dramas', icon: <VideoCameraOutlined />, label: '视频库', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/reviews', icon: <AuditOutlined />, label: '审核队列', roles: ['OPS', 'OPS_MANAGER', 'ADMIN'] },
-  { key: '/shares', icon: <AccountBookOutlined />, label: '分成与上架', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/daily', icon: <DashboardOutlined />, label: '数据同步', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/watermarks', icon: <CameraOutlined />, label: '防伪截图', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/settlements', icon: <AccountBookOutlined />, label: '结算复核', roles: ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'] },
-  { key: '/withdrawals', icon: <BankOutlined />, label: '提款·发票·打款', roles: ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'] },
-  { key: '/rates', icon: <DollarOutlined />, label: '汇率', roles: ['OPS_MANAGER', 'FINANCE', 'ADMIN'] },
-  { key: '/platforms', icon: <SettingOutlined />, label: '平台名单', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
-  { key: '/users', icon: <TeamOutlined />, label: '员工账号', roles: ['ADMIN'] },
-  { key: '/settings', icon: <SettingOutlined />, label: '全局参数', roles: ['ADMIN'] },
-  { key: '/audit', icon: <FileSearchOutlined />, label: '操作日志', roles: ['ADMIN'] },
+  {
+    key: 'staff-review',
+    icon: <AuditOutlined />,
+    label: '审核与内容',
+    children: [
+      { key: '/dramas', icon: <VideoCameraOutlined />, label: '视频库', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+      { key: '/reviews', icon: <AuditOutlined />, label: '审核队列', roles: ['OPS', 'OPS_MANAGER', 'ADMIN'] },
+      { key: '/watermarks', icon: <CameraOutlined />, label: '防伪截图', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+    ],
+  },
+  {
+    key: 'staff-distribution',
+    icon: <BarChartOutlined />,
+    label: '发行与数据',
+    children: [
+      { key: '/shares', icon: <AccountBookOutlined />, label: '分成与上架', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+      { key: '/daily', icon: <DashboardOutlined />, label: '数据同步', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+      { key: '/platforms', icon: <SettingOutlined />, label: '平台名单', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+    ],
+  },
+  {
+    key: 'staff-finance',
+    icon: <AccountBookOutlined />,
+    label: '结算与财务',
+    children: [
+      { key: '/settlements', icon: <AccountBookOutlined />, label: '结算复核', roles: ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'] },
+      { key: '/withdrawals', icon: <BankOutlined />, label: '提款·发票·打款', roles: ['OPS', 'OPS_MANAGER', 'FINANCE', 'ADMIN'] },
+      { key: '/rates', icon: <DollarOutlined />, label: '汇率', roles: ['OPS_MANAGER', 'FINANCE', 'ADMIN'] },
+    ],
+  },
+  {
+    key: 'staff-clients',
+    icon: <TeamOutlined />,
+    label: '客户与合同',
+    children: [
+      { key: '/companies', icon: <TeamOutlined />, label: '客户与资质', roles: ['OPS', 'OPS_MANAGER', 'BD', 'FINANCE', 'ADMIN'] },
+      { key: '/contracts', icon: <FileProtectOutlined />, label: '合同', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+      { key: '/tickets', icon: <CustomerServiceOutlined />, label: '消息与工单', roles: ['OPS', 'OPS_MANAGER', 'BD', 'ADMIN'] },
+    ],
+  },
   { key: '/tasks', icon: <ThunderboltOutlined />, label: '任务中心', roles: ['OPS', 'OPS_MANAGER', 'ADMIN', 'FINANCE', 'BD'] },
+  {
+    key: 'staff-system',
+    icon: <SettingOutlined />,
+    label: '系统',
+    children: [
+      { key: '/users', icon: <TeamOutlined />, label: '员工账号', roles: ['ADMIN'] },
+      { key: '/settings', icon: <SettingOutlined />, label: '全局参数', roles: ['ADMIN'] },
+      { key: '/audit', icon: <FileSearchOutlined />, label: '操作日志', roles: ['ADMIN'] },
+    ],
+  },
 ];
 
 type MenuItem = NonNullable<MenuProps['items']>[number];
@@ -69,6 +107,26 @@ function clientMenu(): MenuItem[] {
   ];
 }
 
+function isGroup(entry: Leaf | Group): entry is Group {
+  return 'children' in entry;
+}
+
+function staffMenu(role: Role): MenuItem[] {
+  const items: MenuItem[] = [];
+  for (const entry of STAFF_NAV) {
+    if (isGroup(entry)) {
+      const children = entry.children
+        .filter((item) => item.roles.includes(role))
+        .map((item) => ({ key: item.key, icon: item.icon, label: item.label }));
+      if (!children.length) continue;
+      items.push({ key: entry.key, icon: entry.icon, label: entry.label, children });
+    } else if (entry.roles.includes(role)) {
+      items.push({ key: entry.key, icon: entry.icon, label: entry.label });
+    }
+  }
+  return items;
+}
+
 function leafKeys(items: MenuItem[]): string[] {
   const keys: string[] = [];
   for (const item of items) {
@@ -79,10 +137,21 @@ function leafKeys(items: MenuItem[]): string[] {
   return keys;
 }
 
+function pathMatches(key: string, pathname: string) {
+  return key === '/' ? pathname === '/' : pathname === key || pathname.startsWith(`${key}/`);
+}
+
+function groupForPath(items: MenuItem[], pathname: string) {
+  for (const item of items) {
+    if (!item || !('key' in item) || item.key == null || !('children' in item) || !item.children) continue;
+    if (leafKeys(item.children).some((key) => pathMatches(key, pathname))) return String(item.key);
+  }
+  return null;
+}
+
 export function Shell() {
   const { user, logout } = useAuth();
   const { mode, density, setMode, setDensity } = useDsTheme();
-  const [openKeys, setOpenKeys] = useState<string[]>(user?.role === 'CLIENT' ? ['client-detail'] : []);
   const { message } = App.useApp();
   const [unread, setUnread] = useState(0);
   const [queue, setQueue] = useState<{ label: string; pendingDramas: number; items: { id: string; fileName: string; purpose: string; dramaId: string | null; dramaTitle: string; episodeNo: number | null; companyId: string; size: string; mode: string; partCount: number; completedCount: number }[] }>({ label: '', pendingDramas: 0, items: [] });
@@ -92,13 +161,16 @@ export function Shell() {
   const items = useMemo(() => {
     if (!user) return [];
     if (user.role === 'CLIENT') return clientMenu();
-    return STAFF_ITEMS.filter((item) => item.roles?.includes(user.role)).map((item) => ({
-      key: item.key,
-      icon: item.icon,
-      label: item.label,
-    }));
+    return staffMenu(user.role);
   }, [user]);
-  const selected = leafKeys(items).filter((key) => (key === '/' ? loc.pathname === '/' : loc.pathname === key || loc.pathname.startsWith(`${key}/`))).sort((a, b) => b.length - a.length)[0];
+  const activeGroup = useMemo(() => groupForPath(items, loc.pathname), [items, loc.pathname]);
+  const [openKeys, setOpenKeys] = useState<string[]>(() => (activeGroup ? [activeGroup] : []));
+  const [pinnedGroup, setPinnedGroup] = useState<string | null>(activeGroup);
+  if (pinnedGroup !== activeGroup) {
+    setPinnedGroup(activeGroup);
+    if (activeGroup && !openKeys.includes(activeGroup)) setOpenKeys([...openKeys, activeGroup]);
+  }
+  const selected = leafKeys(items).filter((key) => pathMatches(key, loc.pathname)).sort((a, b) => b.length - a.length)[0];
   useEffect(() => {
     if (!user) return;
     let stop = false;
@@ -147,17 +219,26 @@ export function Shell() {
 
   return (
     <Layout className="ds-root" style={{ minHeight: '100vh' }}>
-      <Sider width={228} breakpoint="lg" collapsedWidth={64}>
-        <div style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 18px' }} className="brand-mark">短剧发行</div>
+      <Sider
+        className="app-sider"
+        width={228}
+        theme={mode === 'dark' ? 'dark' : 'light'}
+        breakpoint="md"
+        collapsedWidth={0}
+        collapsible
+        trigger={<span title="展开或收起菜单"><MenuOutlined /></span>}
+        zeroWidthTriggerStyle={{ top: 16 }}
+      >
+        <div style={{ height: 52, display: 'flex', alignItems: 'center', padding: '0 18px', flexShrink: 0 }} className="brand-mark">短剧发行</div>
         <Menu
           theme={mode === 'dark' ? 'dark' : 'light'}
           mode="inline"
           selectedKeys={selected ? [selected] : []}
-          openKeys={user?.role === 'CLIENT' ? openKeys : undefined}
+          openKeys={openKeys}
           onOpenChange={setOpenKeys}
           items={items}
           onClick={({ key }) => { if (key.startsWith('/')) nav(key); }}
-          style={{ borderInlineEnd: 0 }}
+          style={{ borderInlineEnd: 0, flex: 'auto' }}
         />
         <div className="sider-foot">内容由客户自行对接海外平台，本平台不推送成片。</div>
       </Sider>

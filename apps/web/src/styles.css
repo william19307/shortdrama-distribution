@@ -29,7 +29,16 @@
 .stat-row { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
 .chart-box { height: 280px; }
 .brand-mark { font-weight: 800; letter-spacing: -.04em; font-size: 16px; }
-.sider-foot { padding: 12px 16px 16px; color: var(--ds-text-3); font-size: 12px; }
+.app-sider { position: sticky; top: 0; height: 100vh; z-index: 20; overflow: visible; }
+.app-sider:not(.ant-layout-sider-zero-width) > .ant-layout-sider-children { display: flex; flex-direction: column; height: 100%; overflow: auto; }
+.sider-foot { padding: 12px 16px 16px; color: var(--ds-text-3); font-size: 12px; flex-shrink: 0; }
+.app-sider .ant-layout-sider-zero-width-trigger {
+  color: var(--ds-text);
+  background: var(--ds-surface-2);
+  border: 1px solid var(--ds-border);
+  border-inline-start: 0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+}
 @media (max-width: 900px) {
   .auth-screen { grid-template-columns: 1fr; }
   .auth-hero { min-height: 220px; padding: 28px; }
